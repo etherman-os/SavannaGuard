@@ -10,7 +10,7 @@ Self-hosted, privacy-respecting bot verification using Proof-of-Work and behavio
 ## Quick Start (3 commands)
 
 ```bash
-git clone https://github.com/yourname/savannaguard && cd savannaguard
+git clone https://github.com/etherman-os/SavannaGuard && cd SavannaGuard
 cp .env.example .env
 docker compose up -d
 ```
@@ -93,51 +93,34 @@ Fastify · SQLite · TypeScript · Vite · Alpine.js · Docker Compose
 
 ## Preview Landing Page (GitHub Pages)
 
-A pre-launch landing page is included in `preview/` so you can publish a teaser site as soon as the repository is public.
+A pre-launch landing page lives in `preview/`.
 
-What it includes:
-
-- Product preview copy focused on frictionless anti-bot positioning
-- Waitlist form with three modes:
-  - Custom endpoint (`waitlistEndpoint`)
-  - Email delivery via FormSubmit (`waitlistEmail`)
-  - Local fallback storage if no destination is configured
-
-Setup:
-
-1. Edit `preview/config.js` and set:
-   - `githubRepoUrl` to your public repository URL
-   - `waitlistEndpoint` (optional) to your API endpoint
-   - or `waitlistEmail` to route signups to your inbox using FormSubmit
-2. Push to `main` (or `master`).
-3. In GitHub repository settings, enable Pages with source set to **GitHub Actions**.
-
-The workflow file is `.github/workflows/preview-pages.yml` and deploys the `preview/` folder.
+- Auto deploy: `.github/workflows/preview-pages.yml` publishes `preview/` on push.
+- Config: update `preview/config.js` with your repo URL and waitlist destination.
+  - `waitlistEndpoint` for your own API
+  - or `waitlistEmail` for FormSubmit fallback
 
 ### Custom Domain (Cloudflare)
 
-If you own `savannaguard.com` in Cloudflare, use this setup:
+Use this DNS setup:
 
-1. Keep `preview/CNAME` as `savannaguard.com`.
-2. In GitHub repo settings -> Pages, set **Custom domain** to `savannaguard.com` and enable **Enforce HTTPS**.
-3. In Cloudflare DNS, remove any `A` records where **Name** is `www`.
-4. Add apex records with **Name** set to `@`:
-  - `A` -> `185.199.108.153`
-  - `A` -> `185.199.109.153`
-  - `A` -> `185.199.110.153`
-  - `A` -> `185.199.111.153`
-5. Add `www` alias with **Name** `www`:
-  - `CNAME` -> `savannaguard.com`
-6. Set Proxy status to **DNS only** while first setup/SSL provisioning is completing. After HTTPS is active, you can switch proxy back to orange cloud if needed.
+| Type | Name | Content |
+|------|------|---------|
+| A | @ | 185.199.108.153 |
+| A | @ | 185.199.109.153 |
+| A | @ | 185.199.110.153 |
+| A | @ | 185.199.111.153 |
+| CNAME | www | savannaguard.com |
 
-Note: DNS propagation can take a few minutes.
+Then in GitHub:
 
-## Business Docs
+1. Settings -> Pages -> set Custom domain to `savannaguard.com`.
+2. Enable **Enforce HTTPS**.
 
-- docs/GO_TO_MARKET.md
-- docs/LANDING_PAGE_COPY.md
-- docs/landing-page.html
-- docs/PAID_SERVER_BLUEPRINT.md
+Notes:
+
+- Keep `preview/CNAME` as `savannaguard.com`.
+- Use **DNS only** in Cloudflare during first SSL provisioning.
 
 ## Privacy
 

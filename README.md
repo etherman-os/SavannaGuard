@@ -99,18 +99,6 @@ Fastify · SQLite · TypeScript · Vite · Alpine.js · Docker Compose
 - This repo: Community verification core (self-hostable).
 - Paid/Private repo: billing, tenant provisioning, managed control-plane, enterprise features.
 
-## Preview Landing Page (Optional)
-
-A pre-launch landing page lives in `preview/`.
-
-- Auto deploy: `.github/workflows/preview-pages.yml` publishes `preview/` on push.
-- Config: update `preview/config.js` with your repo URL and waitlist destination.
-  - `waitlistEndpoint` for your own API
-  - or `waitlistEmail` for FormSubmit fallback
-
-If you are only using SavannaGuard as a bot-protection program, you can skip this section.
-DNS/domain setup is only needed when you want to publish the optional preview website.
-
 ## Privacy
 
 - No Redis — challenge/session state uses SQLite only

@@ -55,15 +55,6 @@ function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
   return false;
 }
 
-function verifyHmac(peer: { psk: string }, payload: string, signature: string): boolean {
-  const expected = crypto.createHmac('sha256', peer.psk).update(payload).digest('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch {
-    return false;
-  }
-}
-
 export function federationRoutes(app: FastifyInstance) {
   function resolveAuthenticatedPeer(payload: string, signature: string) {
     const peers = listPeers();

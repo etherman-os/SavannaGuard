@@ -17,6 +17,14 @@ docker compose up -d
 
 Then open http://localhost:3000/admin (default password: `admin`).
 
+## Usage Summary
+
+SavannaGuard usage flow in production:
+
+1. Frontend requests a challenge from `/api/v1/challenge/create`.
+2. Widget solves PoW and sends telemetry to `/api/v1/challenge/solve`.
+3. Backend validates the issued token with `/api/v1/token/validate` before processing user action.
+
 ## Run Tests
 
 ```bash
@@ -91,7 +99,7 @@ Fastify · SQLite · TypeScript · Vite · Alpine.js · Docker Compose
 - This repo: Community verification core (self-hostable).
 - Paid/Private repo: billing, tenant provisioning, managed control-plane, enterprise features.
 
-## Preview Landing Page (GitHub Pages)
+## Preview Landing Page (Optional)
 
 A pre-launch landing page lives in `preview/`.
 
@@ -100,27 +108,8 @@ A pre-launch landing page lives in `preview/`.
   - `waitlistEndpoint` for your own API
   - or `waitlistEmail` for FormSubmit fallback
 
-### Custom Domain (Cloudflare)
-
-Use this DNS setup:
-
-| Type | Name | Content |
-|------|------|---------|
-| A | @ | 185.199.108.153 |
-| A | @ | 185.199.109.153 |
-| A | @ | 185.199.110.153 |
-| A | @ | 185.199.111.153 |
-| CNAME | www | savannaguard.com |
-
-Then in GitHub:
-
-1. Settings -> Pages -> set Custom domain to `savannaguard.com`.
-2. Enable **Enforce HTTPS**.
-
-Notes:
-
-- Keep `preview/CNAME` as `savannaguard.com`.
-- Use **DNS only** in Cloudflare during first SSL provisioning.
+If you are only using SavannaGuard as a bot-protection program, you can skip this section.
+DNS/domain setup is only needed when you want to publish the optional preview website.
 
 ## Privacy
 

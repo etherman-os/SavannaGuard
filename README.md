@@ -1,5 +1,7 @@
 # SavannaGuard — Privacy-First Bot Security Layer
 
+**Live Demo:** https://savannaguard.com
+
 SavannaGuard is a true self-hosted, privacy-respecting security layer designed to do exactly what traditional CAPTCHAs miss. While other solutions focus only on frustrating image puzzles and tracking users across the web, SavannaGuard functions as an invisible, supplementary defense-in-depth tool.
 
 By combining **Adaptive Proof-of-Work** that auto-adjusts to attack volume, **Per-Site ML Learning** (Online Gaussian model) that learns your real users' behavior, **Bot Signature Tracking** that flags recurring attackers, **JS Engine Timing Oracle** that detects headless browsers via V8 JIT patterns, and **Federated Bot Intelligence** that shares threat intelligence across instances — it creates a robust shield that can act as an alternative to—or an additional layer alongside—existing security measures.
@@ -34,8 +36,8 @@ Mouse dynamics, keystroke cadence, canvas fingerprint, WebGL rendering, screen m
 
 ## Live Links
 
-- Website: https://savannaguard.com
-- Repository: https://github.com/etherman-os/SavannaGuard
+- **Website:** https://savannaguard.com
+- **Repository:** https://github.com/etherman-os/SavannaGuard
 
 ## Quick Start (3 commands)
 

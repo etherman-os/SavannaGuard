@@ -1,14 +1,22 @@
 import crypto from 'crypto';
 import { db } from '../db.js';
+import { checkFederatedSignature } from './federation.js';
 
 const SIGNATURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const BOT_MATCH_THRESHOLD = 3;
+
+export interface BotSignatureCheckResult {
+  isKnownBot: boolean;
+  confidence: number;
+  source: 'none' | 'local' | 'federation';
+}
 
 export function hashUserAgent(userAgent: string): string {
   return crypto.createHash('sha256').update(`ua:${userAgent}`).digest('hex').substring(0, 16);
 }
 
-export function checkBotSignature(ipHash: string, uaHash: string): { isKnownBot: boolean; confidence: number } {
+export function checkBotSignature(ipHash: string, uaHash: string): BotSignatureCheckResult {
+  // Check local signatures first
   const ipMatch = db.prepare(
     'SELECT match_count FROM bot_signatures WHERE hash = ? AND hash_type = ?'
   ).get(ipHash, 'ip') as { match_count: number } | undefined;
@@ -20,19 +28,28 @@ export function checkBotSignature(ipHash: string, uaHash: string): { isKnownBot:
   const ipHits = ipMatch?.match_count ?? 0;
   const uaHits = uaMatch?.match_count ?? 0;
 
+  let localConfidence = 0;
   if (ipHits >= BOT_MATCH_THRESHOLD && uaHits >= BOT_MATCH_THRESHOLD) {
-    return { isKnownBot: true, confidence: 0.95 };
+    localConfidence = 0.95;
+  } else if (ipHits >= BOT_MATCH_THRESHOLD) {
+    localConfidence = 0.7;
+  } else if (uaHits >= BOT_MATCH_THRESHOLD) {
+    localConfidence = 0.6;
   }
 
-  if (ipHits >= BOT_MATCH_THRESHOLD) {
-    return { isKnownBot: true, confidence: 0.7 };
+  // Check federated signatures
+  const fedResult = checkFederatedSignature(ipHash, 'ip') ?? checkFederatedSignature(uaHash, 'ua');
+
+  // Use the higher confidence
+  if (fedResult && fedResult.confidence >= localConfidence) {
+    return { isKnownBot: true, confidence: fedResult.confidence, source: 'federation' };
   }
 
-  if (uaHits >= BOT_MATCH_THRESHOLD) {
-    return { isKnownBot: true, confidence: 0.6 };
+  if (localConfidence > 0) {
+    return { isKnownBot: true, confidence: localConfidence, source: 'local' };
   }
 
-  return { isKnownBot: false, confidence: 0 };
+  return { isKnownBot: false, confidence: 0, source: 'none' };
 }
 
 export function recordBotSignature(ipHash: string, uaHash: string): void {

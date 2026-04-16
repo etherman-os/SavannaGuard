@@ -1,5 +1,5 @@
 import { createChallenge, solveChallenge, setApiUrl } from './api.js';
-import { collectMouseData, type MouseData } from './collectors/mouse.js';
+import { collectMouseData } from './collectors/mouse.js';
 import { collectTiming, resetTiming } from './collectors/timing.js';
 import { collectKeystrokeData } from './collectors/keystroke.js';
 import { collectCanvasData } from './collectors/canvas.js';
@@ -7,6 +7,9 @@ import { collectWebGLData } from './collectors/webgl.js';
 import { collectScreenData } from './collectors/screen.js';
 import { collectNavigatorData } from './collectors/navigator.js';
 import { collectNetworkData, measureLatency } from './collectors/network.js';
+import { collectTimingOracle } from './collectors/timing-oracle.js';
+import { collectTremor } from './collectors/tremor.js';
+import { collectWebRTCOracle } from './collectors/webrtc-oracle.js';
 import type { BehavioralData } from './types.js';
 
 declare global {
@@ -50,8 +53,17 @@ function detectDefaultApiUrl(): string {
 async function collectAllBehavioralData(): Promise<BehavioralData> {
   const mousePromise = collectMouseData();
   const keystrokePromise = collectKeystrokeData();
+  const timingOraclePromise = collectTimingOracle();
+  const tremorPromise = collectTremor();
+  const webrtcPromise = collectWebRTCOracle();
 
-  const [mouseData, keystrokeData] = await Promise.all([mousePromise, keystrokePromise]);
+  const [mouseData, keystrokeData, timingOracleData, tremorData, webrtcData] = await Promise.all([
+    mousePromise,
+    keystrokePromise,
+    timingOraclePromise,
+    tremorPromise,
+    webrtcPromise,
+  ]);
 
   const screenData = collectScreenData();
   const navigatorData = collectNavigatorData();
@@ -93,6 +105,9 @@ async function collectAllBehavioralData(): Promise<BehavioralData> {
     maxVelocity: mouseData.maxVelocity,
     directionChanges: mouseData.directionChanges,
     totalMovement: mouseData.totalMovement,
+    timingOracle: timingOracleData,
+    tremor: tremorData,
+    webrtcOracle: webrtcData,
   };
 
   return behavioral;
@@ -107,10 +122,17 @@ async function run(apiUrl: string): Promise<void> {
 
   const worker = new Worker(new URL('./pow.worker.ts', import.meta.url), { type: 'module' });
   try {
-    const solution = await new Promise<string>((resolve) => {
-      worker.onmessage = (event: MessageEvent<{ solution: string }>) => resolve(event.data.solution);
+    const solution = await new Promise<string | null>((resolve) => {
+      worker.onmessage = (event: MessageEvent<{ solution: string | null }>) => resolve(event.data.solution);
       worker.postMessage({ nonce, difficulty });
     });
+
+    if (!solution) {
+      // PoW failed to find solution within safe range
+      pendingToken = null;
+      flushPending(null);
+      return;
+    }
 
     const behavioral = await collectAllBehavioralData();
 

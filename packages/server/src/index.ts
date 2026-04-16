@@ -6,6 +6,8 @@ import { config } from './config.js';
 import { challengeRoutes } from './routes/challenge.js';
 import { tokenRoutes } from './routes/token.js';
 import { adminRoutes } from './routes/admin.js';
+import { federationRoutes } from './routes/federation.js';
+import { startBackgroundSync } from './services/federation.js';
 import { join, dirname, extname, normalize, resolve, sep } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { statSync, readFileSync } from 'fs';
@@ -23,6 +25,7 @@ export function buildServer(): FastifyInstance {
   challengeRoutes(app);
   tokenRoutes(app);
   adminRoutes(app);
+  federationRoutes(app);
 
   app.get('/widget/*', async (req, rep) => {
     const routeParams = req.params as Record<string, string | undefined>;
@@ -69,6 +72,9 @@ export async function startServer(): Promise<FastifyInstance> {
   console.log(`  API:        http://localhost:${config.port}/api/v1/`);
   console.log(`  Admin:      http://localhost:${config.port}/admin`);
   console.log(`  Widget:     http://localhost:${config.port}/widget/savanna-widget.iife.js`);
+
+  // Start federation background sync if enabled
+  startBackgroundSync();
 
   return app;
 }

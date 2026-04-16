@@ -75,6 +75,9 @@ export async function solveChallenge(
         effectiveType: behavioral.networkType,
         downlink: behavioral.networkDownlink,
       },
+      timingOracleData: behavioral.timingOracle ?? null,
+      tremorData: behavioral.tremor ?? null,
+      webrtcOracleData: behavioral.webrtcOracle ?? null,
     }),
   });
   if (!res.ok) {

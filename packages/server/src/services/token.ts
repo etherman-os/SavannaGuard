@@ -37,8 +37,16 @@ function signPayload(payload: TokenPayload): string {
 function safeEquals(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left, 'utf-8');
   const rightBuffer = Buffer.from(right, 'utf-8');
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  const len = Math.max(leftBuffer.length, rightBuffer.length);
+  const paddedLeft = Buffer.alloc(len);
+  const paddedRight = Buffer.alloc(len);
+  leftBuffer.copy(paddedLeft);
+  rightBuffer.copy(paddedRight);
+  try {
+    return crypto.timingSafeEqual(paddedLeft, paddedRight);
+  } catch {
+    return false;
+  }
 }
 
 export function signToken(sessionId: string, score: number, verdict: string): string {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json && pnpm --filter @savannaguard/widget build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -10,6 +10,7 @@ export interface SolveResponse {
   token: string | null;
   score: number;
   verdict: string;
+  federatedSource?: boolean;
 }
 
 export interface BehavioralData {
@@ -43,4 +44,40 @@ export interface BehavioralData {
   maxVelocity?: number;
   directionChanges?: number;
   totalMovement?: number;
+  // Timing Oracle data (headless browser detection)
+  timingOracle?: {
+    performanceNowMonotonic: boolean;
+    setTimeoutDriftMs: number;
+    dateNowVsPerformanceNowDriftMs: number;
+    cryptoSignTimingMs: number;
+    cryptoDeriveTimingMs: number;
+    hotFunctionTimings: number[];
+    jitPatternVariance: number;
+    polymorphicCallTimingMs: number;
+    rafLatencyVarianceMs: number;
+    rafFrameBudgetRatio: number;
+    headlessLikelihood: number;
+    detectionSignals: string[];
+  };
+  // Physiological Tremor data (biological human signature)
+  tremor?: {
+    dominantFrequencyHz: number;
+    tremorPowerRatio: number;
+    spectralEntropy: number;
+    peakToPeakJitter: number;
+    sampleCount: number;
+  };
+  // WebRTC Topology Oracle data (network classification)
+  webrtcOracle?: {
+    iceCandidateCount: number;
+    localIPCount: number;
+    hasRFC1918Local: boolean;
+    hasSrflxCandidate: boolean;
+    hasRelayedCandidate: boolean;
+    hasPrflxCandidate: boolean;
+    likelyDatacenter: boolean;
+    likelyVPN: boolean;
+    networkComplexity: number;
+    collected: boolean;
+  };
 }

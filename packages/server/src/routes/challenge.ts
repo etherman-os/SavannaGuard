@@ -63,6 +63,42 @@ interface NetworkDataInput {
   downlink?: number;
 }
 
+interface TimingOracleDataInput {
+  performanceNowMonotonic?: boolean;
+  setTimeoutDriftMs?: number;
+  dateNowVsPerformanceNowDriftMs?: number;
+  cryptoSignTimingMs?: number;
+  cryptoDeriveTimingMs?: number;
+  hotFunctionTimings?: number[];
+  jitPatternVariance?: number;
+  polymorphicCallTimingMs?: number;
+  rafLatencyVarianceMs?: number;
+  rafFrameBudgetRatio?: number;
+  headlessLikelihood?: number;
+  detectionSignals?: string[];
+}
+
+interface TremorDataInput {
+  dominantFrequencyHz?: number;
+  tremorPowerRatio?: number;
+  spectralEntropy?: number;
+  peakToPeakJitter?: number;
+  sampleCount?: number;
+}
+
+interface WebRTCOracleDataInput {
+  iceCandidateCount?: number;
+  localIPCount?: number;
+  hasRFC1918Local?: boolean;
+  hasSrflxCandidate?: boolean;
+  hasRelayedCandidate?: boolean;
+  hasPrflxCandidate?: boolean;
+  likelyDatacenter?: boolean;
+  likelyVPN?: boolean;
+  networkComplexity?: number;
+  collected?: boolean;
+}
+
 interface SolveRequestBody {
   challengeId: string;
   solution: string;
@@ -75,6 +111,9 @@ interface SolveRequestBody {
   screenData?: ScreenDataInput;
   navigatorData?: NavigatorDataInput;
   networkData?: NetworkDataInput;
+  timingOracleData?: TimingOracleDataInput | null;
+  tremorData?: TremorDataInput | null;
+  webrtcOracleData?: WebRTCOracleDataInput | null;
 }
 
 function hashIp(ip: string): string {
@@ -160,6 +199,15 @@ export function challengeRoutes(app: FastifyInstance) {
     if (body.screenData) Object.assign(behavioral, body.screenData);
     if (body.navigatorData) Object.assign(behavioral, body.navigatorData);
     if (body.networkData) Object.assign(behavioral, body.networkData);
+    if (body.timingOracleData) {
+      behavioral.timingOracle = body.timingOracleData;
+    }
+    if (body.tremorData) {
+      behavioral.tremor = body.tremorData;
+    }
+    if (body.webrtcOracleData) {
+      behavioral.webrtcOracle = body.webrtcOracleData;
+    }
 
     // 1. Rule-based signal scores
     const signalScores = calculateAllScores(behavioral);
@@ -176,7 +224,8 @@ export function challengeRoutes(app: FastifyInstance) {
 
     // Apply adaptive ML penalty/bonus
     if (adaptive.confidence > 20) {
-      const adaptiveDiff = adaptive.adjustedScore - (signalScores.mouseScore + signalScores.keyboardScore + signalScores.timingScore + signalScores.canvasScore + signalScores.webglScore + signalScores.screenScore + signalScores.navigatorScore + signalScores.networkScore) / 8;
+      const signalAvg = (signalScores.mouseScore + signalScores.keyboardScore + signalScores.timingScore + signalScores.canvasScore + signalScores.webglScore + signalScores.screenScore + signalScores.navigatorScore + signalScores.networkScore + signalScores.timingOracleScore + signalScores.tremorScore + signalScores.webrtcOracleScore) / 11;
+      const adaptiveDiff = adaptive.adjustedScore - signalAvg;
       finalScore = Math.round(finalScore + adaptiveDiff * 0.3);
     }
 
@@ -225,6 +274,12 @@ export function challengeRoutes(app: FastifyInstance) {
       recordBotSignature(sessionRow.ip_hash, uaHash);
     }
 
-    return { success: powValid, token: verdictToken, score: finalScore, verdict };
+    return {
+      success: powValid,
+      token: verdictToken,
+      score: finalScore,
+      verdict,
+      federatedSource: botCheck.source === 'federation',
+    };
   });
 }

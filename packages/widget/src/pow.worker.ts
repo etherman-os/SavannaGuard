@@ -2,8 +2,9 @@
 
 self.onmessage = async (e: MessageEvent<{ nonce: string; difficulty: number }>) => {
   const { nonce, difficulty } = e.data;
-  let solution = 0;
-  while (true) {
+  let solution = BigInt(0);
+  const maxSolutions = BigInt(2 ** 53); // Safe integer limit for JSON serialization
+  while (solution < maxSolutions) {
     const hash = await sha256(nonce + solution.toString());
     if (hash.slice(0, difficulty) === '0'.repeat(difficulty)) {
       self.postMessage({ solution: solution.toString() });
@@ -11,6 +12,8 @@ self.onmessage = async (e: MessageEvent<{ nonce: string; difficulty: number }>) 
     }
     solution++;
   }
+  // If we exhaust the safe range, signal failure (null, not "null")
+  self.postMessage({ solution: null });
 };
 
 async function sha256(input: string): Promise<string> {

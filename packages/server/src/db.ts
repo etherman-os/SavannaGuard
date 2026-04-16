@@ -62,12 +62,54 @@ db.exec(`
     PRIMARY KEY (hash, hash_type)
   );
 
+  CREATE TABLE IF NOT EXISTS federation_peers (
+    peer_id TEXT PRIMARY KEY,
+    peer_url TEXT NOT NULL,
+    psk TEXT NOT NULL,
+    last_seen INTEGER NOT NULL,
+    trusted INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active'
+  );
+
+  CREATE TABLE IF NOT EXISTS federated_signatures (
+    hash TEXT NOT NULL,
+    hash_type TEXT NOT NULL,
+    attack_type TEXT DEFAULT 'unknown',
+    confidence REAL NOT NULL,
+    reporter_count INTEGER DEFAULT 1,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    source_peer TEXT NOT NULL,
+    PRIMARY KEY (hash, hash_type)
+  );
+
+  CREATE TABLE IF NOT EXISTS federated_signature_reports (
+    hash TEXT NOT NULL,
+    hash_type TEXT NOT NULL,
+    peer_id TEXT NOT NULL,
+    reported_at INTEGER NOT NULL,
+    PRIMARY KEY (hash, hash_type, peer_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS federation_sync_state (
+    peer_id TEXT PRIMARY KEY,
+    last_sync INTEGER NOT NULL,
+    last_hash TEXT NOT NULL,
+    sync_version INTEGER DEFAULT 1
+  );
+
   CREATE INDEX IF NOT EXISTS idx_sessions_created
     ON sessions(created_at);
   CREATE INDEX IF NOT EXISTS idx_sessions_verdict
     ON sessions(verdict);
   CREATE INDEX IF NOT EXISTS idx_bot_sigs_last_seen
     ON bot_signatures(last_seen);
+  CREATE INDEX IF NOT EXISTS idx_federated_sigs_last_seen
+    ON federated_signatures(last_seen);
+  CREATE INDEX IF NOT EXISTS idx_federated_sigs_confidence
+    ON federated_signatures(confidence);
+  CREATE INDEX IF NOT EXISTS idx_fed_sig_reports_peer
+    ON federated_signature_reports(peer_id);
 `);
 
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('pow_difficulty', '4')").run();

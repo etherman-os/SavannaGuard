@@ -5,6 +5,15 @@ export interface NetworkData {
   effectiveType: string | null;
 }
 
+interface NavigatorConnection {
+  effectiveType?: string;
+  downlink?: number;
+}
+
+interface NavigatorWithConnection extends Navigator {
+  connection?: NavigatorConnection;
+}
+
 export function collectNetworkData(): NetworkData {
   const defaultData: NetworkData = {
     latency: 0,
@@ -17,16 +26,17 @@ export function collectNetworkData(): NetworkData {
     return defaultData;
   }
 
-  const connection = (navigator as Record<string, unknown>).connection as Record<string, unknown> | undefined;
+  const nav = navigator as NavigatorWithConnection;
+  const connection = nav.connection;
 
   if (!connection) {
     return defaultData;
   }
 
   return {
-    connectionType: (connection.effectiveType as string) || null,
-    downlink: (connection.downlink as number) || null,
-    effectiveType: (connection.effectiveType as string) || null,
+    connectionType: connection.effectiveType || null,
+    downlink: connection.downlink || null,
+    effectiveType: connection.effectiveType || null,
     latency: 0,
   };
 }

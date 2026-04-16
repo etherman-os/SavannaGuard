@@ -15,6 +15,9 @@ const LEARNING_SIGNALS = [
   'screen_score',
   'navigator_score',
   'network_score',
+  'timing_oracle_score',
+  'tremor_score',
+  'webrtc_oracle_score',
 ] as const;
 
 type SignalName = typeof LEARNING_SIGNALS[number];
@@ -28,6 +31,9 @@ interface ScoreInput {
   screenScore: number;
   navigatorScore: number;
   networkScore: number;
+  timingOracleScore: number;
+  tremorScore: number;
+  webrtcOracleScore: number;
 }
 
 export interface AdaptiveResult {
@@ -96,6 +102,9 @@ export function adaptScores(scores: ScoreInput): AdaptiveResult {
     screen_score: scores.screenScore,
     navigator_score: scores.navigatorScore,
     network_score: scores.networkScore,
+    timing_oracle_score: scores.timingOracleScore,
+    tremor_score: scores.tremorScore,
+    webrtc_oracle_score: scores.webrtcOracleScore,
   };
 
   let totalWeight = 0;
@@ -104,7 +113,8 @@ export function adaptScores(scores: ScoreInput): AdaptiveResult {
   let sampleCount = 0;
 
   for (const signal of LEARNING_SIGNALS) {
-    const value = signalValues[signal];
+    const value = signalValues[signal] as number | undefined;
+    if (value === undefined) continue;
     const stats = getSignalStats(signal);
 
     if (stats.count >= 10) {
@@ -123,7 +133,11 @@ export function adaptScores(scores: ScoreInput): AdaptiveResult {
 
   const anomalyPenalty = Math.round(anomalyScore * 30 * confidence);
 
-  const rawAvg = LEARNING_SIGNALS.reduce((sum, s) => sum + signalValues[s], 0) / LEARNING_SIGNALS.length;
+  // Only count signals that have values in signalValues
+  const definedSignals = LEARNING_SIGNALS.filter(s => signalValues[s] !== undefined);
+  const rawAvg = definedSignals.length > 0
+    ? definedSignals.reduce((sum, s) => sum + (signalValues[s] as number || 0), 0) / definedSignals.length
+    : 50; // fallback if no signals
   const adjustedScore = Math.round(Math.max(0, Math.min(100, rawAvg - anomalyPenalty)));
 
   return {
@@ -145,10 +159,15 @@ export function learnFromSession(scores: ScoreInput, verdict: string): void {
     screen_score: scores.screenScore,
     navigator_score: scores.navigatorScore,
     network_score: scores.networkScore,
+    timing_oracle_score: scores.timingOracleScore,
+    tremor_score: scores.tremorScore,
+    webrtc_oracle_score: scores.webrtcOracleScore,
   };
 
   for (const signal of LEARNING_SIGNALS) {
-    updateSignalStats(signal, signalValues[signal]);
+    const value = signalValues[signal] as number | undefined;
+    if (value === undefined) continue;
+    updateSignalStats(signal, value);
   }
 }
 

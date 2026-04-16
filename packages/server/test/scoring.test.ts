@@ -290,6 +290,9 @@ describe('scoring service', () => {
         screenScore: 80,
         navigatorScore: 80,
         networkScore: 80,
+        timingOracleScore: 80,
+        tremorScore: 80,
+        webrtcOracleScore: 80,
         overallScore: 0,
       };
 
@@ -310,6 +313,9 @@ describe('scoring service', () => {
         screenScore: 80,
         navigatorScore: 80,
         networkScore: 80,
+        timingOracleScore: 80,
+        tremorScore: 80,
+        webrtcOracleScore: 80,
         overallScore: 0,
       };
 

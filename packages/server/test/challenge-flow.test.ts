@@ -14,6 +14,7 @@ interface ChallengeSolveResponse {
   token: string | null;
   score: number;
   verdict: string;
+  federatedSource: boolean;
 }
 
 interface TokenValidateResponse {
@@ -74,6 +75,7 @@ describe('challenge flow', () => {
     const solved = solveResponse.json() as ChallengeSolveResponse;
     expect(solved.success).toBe(true);
     expect(typeof solved.token).toBe('string');
+    expect(solved.federatedSource).toBe(false);
 
     const validateResponse = await app.inject({
       method: 'POST',

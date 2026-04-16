@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db, getPowDifficulty, setPowDifficulty } from '../db.js';
-import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent } from '../admin-ui.js';
+import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent, federationContent } from '../admin-ui.js';
 import { getLearningStatus } from '../services/adaptive.js';
 import { getThreatStatus } from '../services/adaptivePow.js';
 import { getBotSignatureStats, cleanupOldSignatures } from '../services/botSignatures.js';
@@ -93,6 +93,11 @@ export function adminRoutes(app: FastifyInstance) {
   app.get('/admin/settings', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
     return rep.type('text/html').send(adminLayout('Settings', settingsContent(), 'settings'));
+  });
+
+  app.get('/admin/federation', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return rep.type('text/html').send(adminLayout('Federation', federationContent(), 'federation'));
   });
 
   app.get('/admin/api/stats', async (req, rep) => {

@@ -9,26 +9,32 @@ export interface SignalScores {
   screenScore: number;
   navigatorScore: number;
   networkScore: number;
+  timingOracleScore: number;
+  tremorScore: number;
+  webrtcOracleScore: number;
   overallScore: number;
 }
 
 const DEFAULT_WEIGHTS = {
-  pow: 0.35,
-  mouse: 0.15,
-  keyboard: 0.10,
-  timing: 0.10,
-  canvas: 0.08,
-  webgl: 0.08,
-  screen: 0.05,
-  navigator: 0.05,
-  network: 0.04,
+  pow: 0.28,
+  mouse: 0.10,
+  keyboard: 0.07,
+  timing: 0.07,
+  canvas: 0.06,
+  webgl: 0.06,
+  screen: 0.04,
+  navigator: 0.04,
+  network: 0.03,
+  timingOracle: 0.08,
+  tremor: 0.08,
+  webrtcOracle: 0.09,
 };
 
 export function calculateOverallScore(
   powScore: number,
   signalScores: SignalScores
 ): number {
-  const { mouseScore, keyboardScore, timingScore, canvasScore, webglScore, screenScore, navigatorScore, networkScore } = signalScores;
+  const { mouseScore, keyboardScore, timingScore, canvasScore, webglScore, screenScore, navigatorScore, networkScore, timingOracleScore, tremorScore, webrtcOracleScore } = signalScores;
 
   const weighted =
     powScore * DEFAULT_WEIGHTS.pow +
@@ -39,7 +45,10 @@ export function calculateOverallScore(
     webglScore * DEFAULT_WEIGHTS.webgl +
     screenScore * DEFAULT_WEIGHTS.screen +
     navigatorScore * DEFAULT_WEIGHTS.navigator +
-    networkScore * DEFAULT_WEIGHTS.network;
+    networkScore * DEFAULT_WEIGHTS.network +
+    timingOracleScore * DEFAULT_WEIGHTS.timingOracle +
+    tremorScore * DEFAULT_WEIGHTS.tremor +
+    webrtcOracleScore * DEFAULT_WEIGHTS.webrtcOracle;
 
   return Math.round(Math.max(0, Math.min(100, weighted)));
 }
@@ -186,6 +195,119 @@ export function scoreNetwork(latencyMs: number | undefined, effectiveType: strin
   return Math.max(0, Math.min(100, score));
 }
 
+export interface TimingOracleData {
+  performanceNowMonotonic: boolean;
+  setTimeoutDriftMs: number;
+  dateNowVsPerformanceNowDriftMs: number;
+  cryptoSignTimingMs: number;
+  cryptoDeriveTimingMs: number;
+  hotFunctionTimings: number[];
+  jitPatternVariance: number;
+  polymorphicCallTimingMs: number;
+  rafLatencyVarianceMs: number;
+  rafFrameBudgetRatio: number;
+  headlessLikelihood: number;
+  detectionSignals: string[];
+}
+
+export function scoreTimingOracle(data: TimingOracleData | null | undefined): number {
+  // If no timing oracle data, return neutral score
+  if (!data) return 50;
+
+  // headlessLikelihood is 0-100, higher means more likely headless
+  // We invert it: 0 = definitely headless, 100 = definitely real browser
+  const baseScore = 100 - data.headlessLikelihood;
+
+  // Additional penalties based on specific detection signals
+  let penalty = 0;
+  const signals = data.detectionSignals ?? [];
+
+  if (signals.includes('perfNowNonMonotonic')) penalty += 15;
+  if (signals.includes('setTimeoutDrift')) penalty += 10;
+  if (signals.includes('datePerfDrift')) penalty += 10;
+  if (signals.includes('cryptoTooFast')) penalty += 20;
+  if (signals.includes('jitLowVariance')) penalty += 25;
+  if (signals.includes('polymorphicTooFast')) penalty += 15;
+  if (signals.includes('rafLowVariance')) penalty += 15;
+  if (signals.includes('rafFrameBudgetLow')) penalty += 10;
+
+  return Math.max(0, Math.min(100, baseScore - penalty));
+}
+
+export interface TremorData {
+  dominantFrequencyHz: number;
+  tremorPowerRatio: number;
+  spectralEntropy: number;
+  peakToPeakJitter: number;
+  sampleCount: number;
+}
+
+export function scoreTremor(data: TremorData | null | undefined): number {
+  // If no tremor data, return neutral score
+  if (!data || data.sampleCount < 20) return 50;
+
+  let score = 60;
+
+  // Check dominant frequency in human tremor range (4-12 Hz)
+  if (data.dominantFrequencyHz < 4 || data.dominantFrequencyHz > 12) {
+    score -= 30; // wrong frequency band
+  }
+
+  // Check power ratio - human tremor should have energy in 4-12Hz band
+  if (data.tremorPowerRatio < 0.15) {
+    score -= 25; // not enough biological tremor
+  }
+
+  // Check spectral entropy - real biological signals have entropy
+  if (data.spectralEntropy < 0.35) {
+    score -= 20; // too deterministic = bot
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
+export interface WebRTCOracleData {
+  iceCandidateCount: number;
+  localIPCount: number;
+  hasRFC1918Local: boolean;
+  hasSrflxCandidate: boolean;
+  hasRelayedCandidate: boolean;
+  hasPrflxCandidate: boolean;
+  likelyDatacenter: boolean;
+  likelyVPN: boolean;
+  networkComplexity: number;
+  collected: boolean;
+}
+
+export function scoreWebRTCOracle(data: WebRTCOracleData | null | undefined): number {
+  // If unavailable, return neutral score
+  if (!data || !data.collected) return 50;
+
+  let score = 55;
+
+  // No candidates at all = suspicious (likely headless)
+  if (data.iceCandidateCount === 0) {
+    return 30; // likely headless or blocked
+  }
+
+  // Single interface / datacenter signal
+  if (data.likelyDatacenter) {
+    score -= 35;
+  }
+
+  // VPN detection
+  if (data.likelyVPN) {
+    score -= 15;
+  }
+
+  // Positive signals: NAT traversal successful
+  if (data.hasRFC1918Local) score += 10;
+  if (data.hasSrflxCandidate) score += 15;
+  if (data.hasRelayedCandidate) score += 5; // real network constraints
+
+  return Math.max(0, Math.min(100, score));
+}
+
 export function calculateAllScores(behavioral: Record<string, unknown>): SignalScores {
   const mouseScore = scoreMouse(behavioral.straightLineRatio as number | undefined);
   const timingScore = scoreTiming(behavioral.timeOnPage as number | undefined);
@@ -202,7 +324,7 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
   );
   const webglScore = scoreWebGL(
     behavioral.hasWebGL as boolean | undefined,
-    behavioral.webglRenderer as string | undefined
+    behavioral.renderer as string | undefined
   );
   const screenScore = scoreScreen(
     behavioral.screenWidth as number | undefined,
@@ -220,6 +342,15 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
     behavioral.latencyMs as number | undefined,
     behavioral.networkType as string | undefined
   );
+  const timingOracleScore = scoreTimingOracle(
+    behavioral.timingOracle as TimingOracleData | undefined
+  );
+  const tremorScore = scoreTremor(
+    behavioral.tremor as TremorData | undefined
+  );
+  const webrtcOracleScore = scoreWebRTCOracle(
+    behavioral.webrtcOracle as WebRTCOracleData | undefined
+  );
 
   return {
     mouseScore,
@@ -230,6 +361,9 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
     screenScore,
     navigatorScore,
     networkScore,
+    timingOracleScore,
+    tremorScore,
+    webrtcOracleScore,
     overallScore: 0,
   };
 }

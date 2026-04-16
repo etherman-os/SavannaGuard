@@ -12,6 +12,10 @@ export interface NavigatorData {
   pdfViewerEnabled: boolean;
 }
 
+type NavigatorWithExtras = Navigator & {
+  deviceMemory?: number;
+};
+
 export function collectNavigatorData(): NavigatorData {
   if (typeof navigator === 'undefined') {
     return {
@@ -30,19 +34,20 @@ export function collectNavigatorData(): NavigatorData {
   }
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const nav = navigator as NavigatorWithExtras;
 
   return {
-    userAgent: navigator.userAgent,
-    platform: navigator.platform || 'unknown',
-    language: navigator.language || 'unknown',
+    userAgent: nav.userAgent,
+    platform: nav.platform || 'unknown',
+    language: nav.language || 'unknown',
     timezone,
     timezoneOffset: new Date().getTimezoneOffset(),
-    cookiesEnabled: navigator.cookieEnabled,
-    doNotTrack: navigator.doNotTrack || null,
-    hardwareConcurrency: navigator.hardwareConcurrency || 0,
-    deviceMemory: (navigator as Record<string, unknown>)['deviceMemory'] as number | null || null,
-    maxTouchPoints: navigator.maxTouchPoints || 0,
-    pdfViewerEnabled: (navigator as Record<string, unknown>)['pdfViewerEnabled'] as boolean || false,
+    cookiesEnabled: nav.cookieEnabled,
+    doNotTrack: nav.doNotTrack || null,
+    hardwareConcurrency: nav.hardwareConcurrency || 0,
+    deviceMemory: nav.deviceMemory ?? null,
+    maxTouchPoints: nav.maxTouchPoints || 0,
+    pdfViewerEnabled: nav.pdfViewerEnabled ?? false,
   };
 }
 

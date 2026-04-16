@@ -1,4 +1,4 @@
-export type AdminTab = 'stats' | 'flagged' | 'settings' | 'threat';
+export type AdminTab = 'stats' | 'flagged' | 'settings' | 'threat' | 'federation';
 
 function navLink(label: string, href: string, active: boolean): string {
   const className = active
@@ -26,6 +26,7 @@ export function adminLayout(title: string, content: string, activeTab: AdminTab)
           ${navLink('Threat Intel', '/admin/threat', activeTab === 'threat')}
           ${navLink('Flagged', '/admin/flagged', activeTab === 'flagged')}
           ${navLink('Settings', '/admin/settings', activeTab === 'settings')}
+          ${navLink('Federation', '/admin/federation', activeTab === 'federation')}
         </div>
       </div>
       <a href="/admin/logout" class="text-sm text-gray-300 hover:text-white">Logout</a>
@@ -202,4 +203,137 @@ export function settingsContent(): string {
       <p x-show="saved" class="text-green-700 text-sm mt-3">Saved.</p>
     </form>
   </div>`;
+}
+
+export function federationContent(): string {
+  return `<div x-data="federation()" x-init="refresh()">
+    <template x-if="loading"><p class="text-gray-500 mb-3">Loading...</p></template>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Total Peers</p>
+        <p class="text-2xl font-bold" x-text="stats.peerCount">0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Active Peers</p>
+        <p class="text-2xl font-bold text-green-600" x-text="stats.activePeerCount">0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Federated Signatures</p>
+        <p class="text-2xl font-bold text-blue-600" x-text="stats.signatureCount">0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Avg Confidence</p>
+        <p class="text-2xl font-bold" x-text="(stats.avgConfidence * 100).toFixed(0) + '%'">0%</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white p-4 rounded shadow">
+        <h3 class="text-lg font-bold mb-4">Trusted Peers</h3>
+
+        <form @submit.prevent="addingPeer=true; fetch('/admin/api/federation/peers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({peerUrl: newPeerUrl, psk: newPeerPsk})}).then(r=>r.json()).then(()=>{newPeerUrl=''; newPeerPsk=''; refresh()}).finally(()=>addingPeer=false)" class="mb-4">
+          <div class="flex gap-2">
+            <input type="url" x-model="newPeerUrl" placeholder="https://peer.example.com" class="border p-2 flex-1" required>
+            <input type="password" x-model="newPeerPsk" placeholder="PSK" class="border p-2 w-32" required>
+            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded" :disabled="addingPeer">
+              <span x-text="addingPeer ? '...' : '+ Add'"></span>
+            </button>
+          </div>
+        </form>
+
+        <template x-if="peers.length === 0">
+          <p class="text-gray-500 text-sm">No peers configured. Add a peer to start sharing bot signatures.</p>
+        </template>
+
+        <table class="w-full text-sm" x-show="peers.length > 0">
+          <thead>
+            <tr class="text-left text-gray-500 border-b">
+              <th class="pb-2">Peer URL</th>
+              <th class="pb-2">Status</th>
+              <th class="pb-2">Last Seen</th>
+              <th class="pb-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="peer in peers" :key="peer.peerId">
+              <tr class="border-b">
+                <td class="py-2 truncate" x-text="peer.peerUrl"></td>
+                <td class="py-2">
+                  <span class="px-2 py-1 rounded text-xs" :class="peer.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'" x-text="peer.status"></span>
+                </td>
+                <td class="py-2 text-gray-500" x-text="peer.lastSeen ? new Date(peer.lastSeen).toLocaleString() : 'Never'"></td>
+                <td class="py-2">
+                  <button @click="fetch('/admin/api/federation/peers/' + peer.peerId, {method:'DELETE'}).then(()=>refresh())" class="text-red-600 hover:text-red-800">Remove</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bg-white p-4 rounded shadow">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">Top Federated Signatures</h3>
+          <button @click="syncing=true; fetch('/admin/api/federation/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({peerUrl: ''})}).finally(()=>{syncing=false; refresh()})" class="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded">
+            <span x-text="syncing ? 'Syncing...' : 'Sync All'"></span>
+          </button>
+        </div>
+
+        <template x-if="topSignatures.length === 0">
+          <p class="text-gray-500 text-sm">No federated signatures yet. Signatures appear when other instances report bots.</p>
+        </template>
+
+        <table class="w-full text-sm" x-show="topSignatures.length > 0">
+          <thead>
+            <tr class="text-left text-gray-500 border-b">
+              <th class="pb-2">Hash (partial)</th>
+              <th class="pb-2">Type</th>
+              <th class="pb-2">Confidence</th>
+              <th class="pb-2">Reporters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="sig in topSignatures" :key="sig.hash + sig.hashType">
+              <tr class="border-b">
+                <td class="py-2 font-mono text-xs" x-text="sig.hash.substring(0, 8) + '...'"></td>
+                <td class="py-2" x-text="sig.hashType"></td>
+                <td class="py-2" x-text="(sig.confidence * 100).toFixed(0) + '%'"></td>
+                <td class="py-2" x-text="sig.reporterCount"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.data('federation', () => ({
+        loading: true,
+        stats: { peerCount: 0, activePeerCount: 0, signatureCount: 0, avgConfidence: 0 },
+        peers: [],
+        topSignatures: [],
+        newPeerUrl: '',
+        newPeerPsk: '',
+        addingPeer: false,
+        syncing: false,
+        async refresh() {
+          this.loading = true;
+          try {
+            const [statsRes, peersRes] = await Promise.all([
+              fetch('/admin/api/federation/stats').then(r => r.json()),
+              fetch('/admin/api/federation/peers').then(r => r.json())
+            ]);
+            this.stats = statsRes;
+            this.peers = peersRes;
+            this.topSignatures = statsRes.topSignatures || [];
+          } finally {
+            this.loading = false;
+          }
+        }
+      }));
+    });
+  </script>`;
 }

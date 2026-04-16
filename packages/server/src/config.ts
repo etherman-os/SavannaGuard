@@ -1,5 +1,13 @@
+const secretKey = process.env.SECRET_KEY;
+if (!secretKey) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SECRET_KEY environment variable is required in production');
+  }
+  console.warn('WARNING: Using default SECRET_KEY - DO NOT USE IN PRODUCTION');
+}
+
 export const config = {
-  secretKey: process.env.SECRET_KEY ?? 'dev-secret-change-in-production',
+  secretKey: secretKey ?? 'dev-secret-change-in-production',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'admin',
   port: parseInt(process.env.PORT ?? '3000', 10),
   dbPath: process.env.DB_PATH ?? './data/savannaguard.db',

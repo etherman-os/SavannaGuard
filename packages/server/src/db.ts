@@ -3,7 +3,7 @@ import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { config } from './config.js';
 
-const MIN_POW_DIFFICULTY = 1;
+const MIN_POW_DIFFICULTY = 3;
 const MAX_POW_DIFFICULTY = 6;
 
 mkdirSync(dirname(config.dbPath), { recursive: true });

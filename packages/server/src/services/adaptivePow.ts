@@ -35,9 +35,9 @@ export function adaptPowDifficulty(): { difficulty: number; reason: string; thre
   } else if (snapshot.botRatio > 0.4) {
     target = Math.min(6, current + 1);
   } else if (snapshot.botRatio < 0.1 && snapshot.totalSessions > 50) {
-    target = Math.max(1, current - 1);
+    target = Math.max(3, current - 1);
   } else if (snapshot.botRatio < 0.2 && snapshot.totalSessions > 100) {
-    target = Math.max(2, current - 1);
+    target = Math.max(3, current - 1);
   }
 
   if (target !== current) {

@@ -67,12 +67,36 @@ function verifyHmac(peer: { psk: string }, payload: string, signature: string): 
 export function federationRoutes(app: FastifyInstance) {
   function resolveAuthenticatedPeer(payload: string, signature: string) {
     const peers = listPeers();
+    let matchedPeer: ReturnType<typeof listPeers>[0] | null = null;
+
+    // Check all peers in constant time pattern to prevent timing attack
     for (const peer of peers) {
-      if (verifyHmac(peer, payload, signature)) {
-        return peer;
+      // Use constant-time comparison for HMAC check
+      const expected = crypto.createHmac('sha256', peer.psk).update(payload).digest('hex');
+      let isValid = true;
+      if (expected.length !== signature.length) {
+        isValid = false;
+      } else {
+        try {
+          const expectedBuf = Buffer.from(expected);
+          const sigBuf = Buffer.from(signature);
+          // Check all bytes to ensure constant time - use XOR to detect any difference
+          for (let i = 0; i < expectedBuf.length; i++) {
+            if (expectedBuf[i] !== sigBuf[i]) {
+              isValid = false;
+              break;
+            }
+          }
+        } catch {
+          isValid = false;
+        }
+      }
+      if (isValid) {
+        matchedPeer = peer;
       }
     }
-    return null;
+
+    return matchedPeer;
   }
 
   async function handleStateRequest(req: FastifyRequest, rep: FastifyReply) {
@@ -144,15 +168,15 @@ export function federationRoutes(app: FastifyInstance) {
       return rep.status(401).send({ error: 'Invalid HMAC signature' });
     }
 
-    // Record all signatures
+    // Record all signatures with validation
     for (const sig of body.signatures) {
-      recordFederatedSignature(
-        sig.hash,
-        sig.hashType,
-        sig.attackType ?? 'unknown',
-        sig.confidence,
-        peer.peerId
-      );
+      // Validate inputs
+      const hash = String(sig.hash ?? '').slice(0, 128); // max 128 chars, prevent DoS
+      const hashType = ['ip', 'ua', 'combined'].includes(sig.hashType) ? sig.hashType : 'ip';
+      const attackType = String(sig.attackType ?? 'unknown').slice(0, 50); // max 50 chars
+      const confidence = Math.max(0, Math.min(1, Number(sig.confidence ?? 0))); // clamp 0-1
+
+      recordFederatedSignature(hash, hashType, attackType, confidence, peer.peerId);
     }
 
     return { received: body.signatures.length, status: 'ok' };

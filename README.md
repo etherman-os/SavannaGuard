@@ -1,6 +1,10 @@
-# SavannaGuard — Privacy-First Bot Protection
+# SavannaGuard — Privacy-First Bot Security Layer
 
-Self-hosted, privacy-respecting bot verification using Proof-of-Work and behavioral scoring. No Redis, no external services, no behavioral data leaving your server.
+SavannaGuard is a true self-hosted, privacy-respecting security layer designed to do exactly what traditional CAPTCHAs miss. While other solutions focus only on frustrating image puzzles and tracking users across the web, SavannaGuard functions as an invisible, supplementary defense-in-depth tool. 
+
+By combining **Proof-of-Work (PoW)** to increase the computational cost for botnets and **Behavioral Scoring** to catch non-human interactions, it creates a robust shield that can act as an alternative to—or an additional layer alongside—existing security measures. 
+
+**Zero third-party dependencies:** No Redis requirement, no external API calls to big tech, and absolutely no behavioral data leaving your servers.
 
 ## Live Links
 

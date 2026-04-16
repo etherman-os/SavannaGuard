@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+*.pem
+*.key
+*.p12
+*.crt
+*.cer
+*.secret
+secrets/
+
+# Runtime data and databases
+data/
+*.db
+*.db-shm
+*.db-wal
+packages/server/data/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
+# Project-private AI/context files
+CLAUDE.md
+claude.md
+savannaguard.txt
+docs/
+docs/superpowers/
+
+# Private planning notes (keep sensitive business ideas local)
+private/
+docs/private/
+notes/
+brainstorm/
+*.private.md

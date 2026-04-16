@@ -1,0 +1,16 @@
+{
+  "name": "savannaguard",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @savannaguard/server test",
+    "test:watch": "pnpm --filter @savannaguard/server test:watch",
+    "dev:server": "pnpm --filter @savannaguard/server dev",
+    "dev:widget": "pnpm --filter @savannaguard/widget dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

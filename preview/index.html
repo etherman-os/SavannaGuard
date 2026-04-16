@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SavannaGuard | Private Preview</title>
+  <meta
+    name="description"
+    content="SavannaGuard: bulmaca cozdurmeden calisan, self-hosted ve privacy-first bot koruma katmani. Private preview icin on kayda katilin."
+  >
+  <meta property="og:title" content="SavannaGuard | Private Preview">
+  <meta property="og:description" content="Self-hosted, privacy-first ve dusuk surtunmeli bot koruma preview sayfasi.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="./assets/savannaguard-logo.png">
+  <link rel="icon" type="image/png" href="./assets/savannaguard-logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="SavannaGuard home">
+      <img class="brand-logo" src="./assets/savannaguard-logo.png" alt="SavannaGuard logo" width="34" height="34">
+      <span class="brand-text">SavannaGuard</span>
+    </a>
+    <nav class="topnav">
+      <a href="#features">Ozellikler</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#waitlist">On Kayit</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero section">
+      <div class="hero-left reveal">
+        <p class="eyebrow">PRIVATE PREVIEW / Q2 2026</p>
+        <h1>Bulmaca cozdurmeyen, dogrudan bot maliyeti yukselten koruma katmani.</h1>
+        <p class="lead">
+          SavannaGuard; gorunmez challenge, Proof-of-Work, davranis/timing sinyalleri ve imzali token akisiyla
+          spam ile otomasyonu yavaslatir. Self-hosted calisir, veriniz kendi altyapinizda kalir.
+        </p>
+
+        <div class="cta-row">
+          <a id="repo-link" class="btn btn-primary" href="https://github.com/yourname/savannaguard" target="_blank" rel="noreferrer">GitHub Community Repo</a>
+          <a class="btn btn-ghost" href="#waitlist">Preview Davet Listesi</a>
+        </div>
+
+        <ul class="chip-row" aria-label="Core values">
+          <li>Self-hosted</li>
+          <li>Privacy-first</li>
+          <li>Low-friction UX</li>
+          <li>Fast API integration</li>
+        </ul>
+      </div>
+
+      <aside class="hero-right reveal">
+        <div class="logo-panel">
+          <img class="hero-logo" src="./assets/savannaguard-logo.png" alt="SavannaGuard logo preview">
+        </div>
+        <div class="signal-card">
+          <p class="card-label">Signal Stack</p>
+          <ul>
+            <li><strong>PoW:</strong> bot maliyetini arttirir</li>
+            <li><strong>Timing:</strong> davranis profili cikarir</li>
+            <li><strong>Token:</strong> replay korumali dogrulama</li>
+          </ul>
+        </div>
+        <div class="metric-grid">
+          <article>
+            <p class="metric-title">Kurulum</p>
+            <p class="metric-value">Dakikalar</p>
+          </article>
+          <article>
+            <p class="metric-title">Mimari</p>
+            <p class="metric-value">API-first</p>
+          </article>
+          <article>
+            <p class="metric-title">Dagitim</p>
+            <p class="metric-value">Docker</p>
+          </article>
+          <article>
+            <p class="metric-title">Hedef</p>
+            <p class="metric-value">Captcha alternatifi</p>
+          </article>
+        </div>
+      </aside>
+    </section>
+
+    <section id="features" class="section">
+      <div class="section-head reveal">
+        <p class="eyebrow">Neden SavannaGuard</p>
+        <h2>Preview asamasinda bile net deger onerisi</h2>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card reveal">
+          <h3>Gorunmez Koruma</h3>
+          <p>Klasik bulmaca akisini azaltir, gercek kullanici deneyimini bozmaz.</p>
+        </article>
+        <article class="feature-card reveal">
+          <h3>Token Guvenligi</h3>
+          <p>Oturuma bagli, sureli ve dogrulanabilir token akisiyla replay riskini dusurur.</p>
+        </article>
+        <article class="feature-card reveal">
+          <h3>Kendi Altyapinda</h3>
+          <p>Ucuncu taraf anti-bot servisine mecbur kalmadan kendi VPS ya da cluster'inizde calisir.</p>
+        </article>
+        <article class="feature-card reveal">
+          <h3>Gelistirici Dostu</h3>
+          <p>Widget + API akisiyla mevcut form ve auth endpointlerine hizli entegrasyon saglar.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="roadmap" class="section roadmap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Roadmap</p>
+        <h2>Simdi preview, sonra production</h2>
+      </div>
+
+      <div class="timeline">
+        <article class="step reveal">
+          <span>01</span>
+          <h3>Community Launch</h3>
+          <p>Ucretsiz core repo, temel challenge-token akisi, dokumante entegrasyon.</p>
+        </article>
+        <article class="step reveal">
+          <span>02</span>
+          <h3>Early Adopter Program</h3>
+          <p>On kayit daveti, gercek trafik geri bildirimi ve anti-abuse tuning donemi.</p>
+        </article>
+        <article class="step reveal">
+          <span>03</span>
+          <h3>Managed Katman</h3>
+          <p>Private control-plane, tenant yonetimi, premium destek ve enterprise paketler.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="waitlist" class="section">
+      <div class="waitlist reveal">
+        <div class="waitlist-head">
+          <p class="eyebrow">Private Preview Daveti</p>
+          <h2>On kayit formuna katil, erken erisim listesine gir</h2>
+          <p>
+            Formu doldurdugunuzda talebiniz configured endpoint'e (veya e-posta yonlendirmesine) iletilir.
+            Bu alan intentionally sade tutuldu; amac, yayina hizli cikmak.
+          </p>
+        </div>
+
+        <form id="waitlist-form" novalidate>
+          <div class="form-grid">
+            <label>
+              Is e-postasi
+              <input type="email" name="email" autocomplete="email" required>
+            </label>
+            <label>
+              Sirket / Proje
+              <input type="text" name="company" autocomplete="organization" required>
+            </label>
+            <label>
+              Aylik dogrulama hacmi
+              <select name="volume" required>
+                <option value="" disabled selected>Seciniz</option>
+                <option value="under-100k">100K alti</option>
+                <option value="100k-1m">100K - 1M</option>
+                <option value="1m-10m">1M - 10M</option>
+                <option value="10m-plus">10M+</option>
+              </select>
+            </label>
+            <label>
+              Kullanim senaryosu
+              <input type="text" name="useCase" placeholder="Signup, Login, Form, API..." required>
+            </label>
+          </div>
+
+          <label>
+            Not (opsiyonel)
+            <textarea name="notes" rows="4" placeholder="Mevcut anti-bot pain point'iniz nedir?"></textarea>
+          </label>
+
+          <label class="consent">
+            <input type="checkbox" name="consent" required>
+            <span>Preview iletisimi icin e-posta almayi kabul ediyorum.</span>
+          </label>
+
+          <input
+            type="text"
+            name="website"
+            class="hp"
+            tabindex="-1"
+            autocomplete="off"
+            aria-hidden="true"
+          >
+
+          <button id="waitlist-submit" class="btn btn-primary" type="submit">On Kayit Gonder</button>
+          <p id="form-status" class="status" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>© 2026 SavannaGuard Preview. Captcha degil, daha dusuk surtunmeli bot savunmasi.</p>
+  </footer>
+
+  <script src="./config.js"></script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

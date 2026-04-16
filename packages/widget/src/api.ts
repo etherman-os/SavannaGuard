@@ -30,8 +30,51 @@ export async function solveChallenge(
       challengeId,
       solution,
       sessionId,
-      mouseData: { straightLineRatio: behavioral.straightLineRatio },
-      timingData: { timeOnPageMs: behavioral.timeOnPage },
+      mouseData: {
+        straightLineRatio: behavioral.straightLineRatio,
+        velocity: behavioral.mouseVelocity,
+        maxVelocity: behavioral.maxVelocity,
+        directionChanges: behavioral.directionChanges,
+      },
+      timingData: {
+        timeOnPageMs: behavioral.timeOnPage,
+      },
+      keyboardData: {
+        avgDwellTime: behavioral.avgDwellTime,
+        avgFlightTime: behavioral.avgFlightTime,
+        dwellVariance: behavioral.dwellVariance,
+        flightVariance: behavioral.flightVariance,
+        totalKeystrokes: behavioral.totalKeystrokes,
+      },
+      canvasData: {
+        canvasHash: behavioral.canvasHash,
+        isCanvasSupported: behavioral.isCanvasSupported,
+      },
+      webglData: {
+        renderer: behavioral.webglRenderer,
+        vendor: behavioral.webglVendor,
+        hasWebGL: behavioral.hasWebGL,
+      },
+      screenData: {
+        width: behavioral.screenWidth,
+        height: behavioral.screenHeight,
+        colorDepth: behavioral.colorDepth,
+        pixelRatio: behavioral.pixelRatio,
+      },
+      navigatorData: {
+        userAgent: behavioral.userAgent,
+        platform: behavioral.platform,
+        language: behavioral.language,
+        timezone: behavioral.timezone,
+        timezoneOffset: behavioral.timezoneOffset,
+        hardwareConcurrency: behavioral.hardwareConcurrency,
+        maxTouchPoints: behavioral.maxTouchPoints,
+      },
+      networkData: {
+        latencyMs: behavioral.latencyMs,
+        effectiveType: behavioral.networkType,
+        downlink: behavioral.networkDownlink,
+      },
     }),
   });
   if (!res.ok) {

@@ -5,4 +5,8 @@ export const config = {
   dbPath: process.env.DB_PATH ?? './data/savannaguard.db',
   tokenTtlMs: 60 * 60 * 1000, // 1 hour
   challengeTtlMs: 5 * 60 * 1000, // 5 minutes
+  rateLimit: {
+    maxChallengesPerMinute: 10,
+    windowMs: 60 * 1000, // 1 minute
+  },
 };

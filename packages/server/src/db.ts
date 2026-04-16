@@ -15,33 +15,60 @@ db.exec(`
     id TEXT PRIMARY KEY,
     nonce TEXT NOT NULL,
     difficulty INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
+    expires_at INTEGER NOT NULL,
+    session_id TEXT NOT NULL DEFAULT ''
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL,
+    ip_hash TEXT NOT NULL,
+    user_agent TEXT NOT NULL,
     mouse_score REAL DEFAULT 0,
     keyboard_score REAL DEFAULT 0,
     timing_score REAL DEFAULT 0,
     pow_score REAL DEFAULT 0,
+    canvas_score REAL DEFAULT 0,
+    webgl_score REAL DEFAULT 0,
+    screen_score REAL DEFAULT 0,
+    navigator_score REAL DEFAULT 0,
+    network_score REAL DEFAULT 0,
     final_score REAL DEFAULT 0,
     verdict TEXT DEFAULT 'pending',
-    verdict_token TEXT,
-    ip_hash TEXT NOT NULL,
-    user_agent TEXT NOT NULL
+    verdict_token TEXT
   );
 
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
-`);
 
-const challengeColumns = db.prepare('PRAGMA table_info(challenges)').all() as { name: string }[];
-if (!challengeColumns.some((column) => column.name === 'session_id')) {
-  db.exec("ALTER TABLE challenges ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
-}
+  CREATE TABLE IF NOT EXISTS site_signals (
+    signal_key TEXT PRIMARY KEY,
+    signal_name TEXT NOT NULL,
+    mean_value REAL DEFAULT 0,
+    count INTEGER DEFAULT 0,
+    stddev REAL DEFAULT 0,
+    last_updated INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS bot_signatures (
+    hash TEXT NOT NULL,
+    hash_type TEXT NOT NULL,
+    match_count INTEGER DEFAULT 1,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    source TEXT DEFAULT 'auto',
+    PRIMARY KEY (hash, hash_type)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_created
+    ON sessions(created_at);
+  CREATE INDEX IF NOT EXISTS idx_sessions_verdict
+    ON sessions(verdict);
+  CREATE INDEX IF NOT EXISTS idx_bot_sigs_last_seen
+    ON bot_signatures(last_seen);
+`);
 
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('pow_difficulty', '4')").run();
 
@@ -60,6 +87,11 @@ export interface DbSession {
   keyboard_score: number;
   timing_score: number;
   pow_score: number;
+  canvas_score: number;
+  webgl_score: number;
+  screen_score: number;
+  navigator_score: number;
+  network_score: number;
   final_score: number;
   verdict: string;
   verdict_token: string | null;

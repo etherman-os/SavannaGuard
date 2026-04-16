@@ -2,7 +2,7 @@
 
 SavannaGuard is a true self-hosted, privacy-respecting security layer designed to do exactly what traditional CAPTCHAs miss. While other solutions focus only on frustrating image puzzles and tracking users across the web, SavannaGuard functions as an invisible, supplementary defense-in-depth tool. 
 
-By combining **Proof-of-Work (PoW)** to increase the computational cost for botnets and **Behavioral Scoring** to catch non-human interactions, it creates a robust shield that can act as an alternative to—or an additional layer alongside—existing security measures. 
+By combining **Adaptive Proof-of-Work** that auto-adjusts to attack volume, **Per-Site ML Learning** (Online Gaussian model) that learns your real users' behavior, **Bot Signature Tracking** that flags recurring attackers, and **8 Behavioral Signal Collectors** (mouse dynamics, keystroke cadence, canvas fingerprint, WebGL rendering, screen metrics, navigator properties, network timing, page timing) — it creates a robust shield that can act as an alternative to—or an additional layer alongside—existing security measures. 
 
 **Zero third-party dependencies:** No Redis requirement, no external API calls to big tech, and absolutely no behavioral data leaving your servers.
 

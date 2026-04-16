@@ -1,6 +1,12 @@
 import { createChallenge, solveChallenge, setApiUrl } from './api.js';
-import { collectMouseData } from './collectors/mouse.js';
+import { collectMouseData, type MouseData } from './collectors/mouse.js';
 import { collectTiming, resetTiming } from './collectors/timing.js';
+import { collectKeystrokeData } from './collectors/keystroke.js';
+import { collectCanvasData } from './collectors/canvas.js';
+import { collectWebGLData } from './collectors/webgl.js';
+import { collectScreenData } from './collectors/screen.js';
+import { collectNavigatorData } from './collectors/navigator.js';
+import { collectNetworkData, measureLatency } from './collectors/network.js';
 import type { BehavioralData } from './types.js';
 
 declare global {
@@ -41,11 +47,61 @@ function detectDefaultApiUrl(): string {
   return window.location.origin;
 }
 
+async function collectAllBehavioralData(): Promise<BehavioralData> {
+  const mousePromise = collectMouseData();
+  const keystrokePromise = collectKeystrokeData();
+
+  const [mouseData, keystrokeData] = await Promise.all([mousePromise, keystrokePromise]);
+
+  const screenData = collectScreenData();
+  const navigatorData = collectNavigatorData();
+  const canvasData = collectCanvasData();
+  const webglData = collectWebGLData();
+  const networkData = collectNetworkData();
+  const { timeOnPage } = collectTiming();
+
+  const latency = await measureLatency(currentApiUrl);
+
+  const behavioral: BehavioralData = {
+    straightLineRatio: mouseData.straightLineRatio,
+    timeOnPage,
+    avgDwellTime: keystrokeData.avgDwellTime,
+    avgFlightTime: keystrokeData.avgFlightTime,
+    dwellVariance: keystrokeData.dwellVariance,
+    flightVariance: keystrokeData.flightVariance,
+    totalKeystrokes: keystrokeData.totalKeystrokes,
+    canvasHash: canvasData.canvasHash,
+    isCanvasSupported: canvasData.isCanvasSupported,
+    webglRenderer: webglData.renderer,
+    webglVendor: webglData.vendor,
+    hasWebGL: webglData.hasWebGL,
+    screenWidth: screenData.width,
+    screenHeight: screenData.height,
+    colorDepth: screenData.colorDepth,
+    pixelRatio: screenData.pixelRatio,
+    userAgent: navigatorData.userAgent,
+    platform: navigatorData.platform,
+    language: navigatorData.language,
+    timezone: navigatorData.timezone,
+    timezoneOffset: navigatorData.timezoneOffset,
+    hardwareConcurrency: navigatorData.hardwareConcurrency,
+    maxTouchPoints: navigatorData.maxTouchPoints,
+    networkType: networkData.effectiveType || undefined,
+    networkDownlink: networkData.downlink || undefined,
+    latencyMs: latency,
+    mouseVelocity: mouseData.avgVelocity,
+    maxVelocity: mouseData.maxVelocity,
+    directionChanges: mouseData.directionChanges,
+    totalMovement: mouseData.totalMovement,
+  };
+
+  return behavioral;
+}
+
 async function run(apiUrl: string): Promise<void> {
   setApiUrl(apiUrl);
   resetTiming();
-
-  const mousePromise = collectMouseData();
+  currentApiUrl = apiUrl;
 
   const { challengeId, nonce, difficulty, sessionId } = await createChallenge();
 
@@ -56,9 +112,7 @@ async function run(apiUrl: string): Promise<void> {
       worker.postMessage({ nonce, difficulty });
     });
 
-    const { straightLineRatio } = await mousePromise;
-    const { timeOnPage } = collectTiming();
-    const behavioral: BehavioralData = { straightLineRatio, timeOnPage };
+    const behavioral = await collectAllBehavioralData();
 
     const result = await solveChallenge(challengeId, solution, sessionId, behavioral);
     pendingToken = result.token ?? null;

@@ -1,4 +1,4 @@
-export type AdminTab = 'stats' | 'flagged' | 'settings';
+export type AdminTab = 'stats' | 'flagged' | 'settings' | 'threat';
 
 function navLink(label: string, href: string, active: boolean): string {
   const className = active
@@ -20,9 +20,10 @@ export function adminLayout(title: string, content: string, activeTab: AdminTab)
   <nav class="bg-gray-800 text-white p-4">
     <div class="container mx-auto flex flex-wrap gap-3 items-center justify-between">
       <div class="flex items-center gap-3">
-        <h1 class="text-xl font-bold">SavannaGuard Admin</h1>
+        <h1 class="text-xl font-bold">SavannaGuard</h1>
         <div class="flex items-center gap-2">
           ${navLink('Stats', '/admin', activeTab === 'stats')}
+          ${navLink('Threat Intel', '/admin/threat', activeTab === 'threat')}
           ${navLink('Flagged', '/admin/flagged', activeTab === 'flagged')}
           ${navLink('Settings', '/admin/settings', activeTab === 'settings')}
         </div>
@@ -56,16 +57,105 @@ export function loginPage(error = ''): string {
 }
 
 export function statsContent(): string {
-  return `<div x-data="{ loading: true, totalSessions: 0, humanCount: 0, botCount: 0, suspiciousCount: 0, avgScore: 0 }" x-init="fetch('/admin/api/stats').then(r=>r.json()).then(d=>Object.assign($data,d)).finally(()=>loading=false)">
+  return `<div x-data="{ loading: true, totalSessions: 0, humanCount: 0, botCount: 0, suspiciousCount: 0, avgScore: 0, botRatio: 0, difficulty: 4, learningSamples: 0 }" x-init="fetch('/admin/api/stats').then(r=>r.json()).then(d=>Object.assign($data,d)).finally(()=>loading=false)">
     <template x-if="loading"><p class="text-gray-500 mb-3">Loading...</p></template>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Last 24h Sessions</p><p class="text-2xl font-bold" x-text="totalSessions">0</p></div>
-      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Last 24h Humans</p><p class="text-2xl font-bold text-green-600" x-text="humanCount">0</p></div>
-      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Last 24h Bots</p><p class="text-2xl font-bold text-red-600" x-text="botCount">0</p></div>
-      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Last 24h Avg Score</p><p class="text-2xl font-bold" x-text="avgScore != null ? Number(avgScore).toFixed(1) : '0.0'">0.0</p></div>
+      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Humans</p><p class="text-2xl font-bold text-green-600" x-text="humanCount">0</p></div>
+      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Bots Blocked</p><p class="text-2xl font-bold text-red-600" x-text="botCount">0</p></div>
+      <div class="bg-white p-4 rounded shadow"><p class="text-gray-500 text-sm">Avg Score</p><p class="text-2xl font-bold" x-text="avgScore != null ? Number(avgScore).toFixed(1) : '0.0'">0.0</p></div>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mt-4">
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Bot Ratio (10min)</p>
+        <div class="flex items-center gap-2">
+          <p class="text-2xl font-bold" :class="botRatio > 40 ? 'text-red-600' : botRatio > 20 ? 'text-yellow-600' : 'text-green-600'" x-text="botRatio + '%'">0%</p>
+          <div class="flex-1 bg-gray-200 rounded h-3">
+            <div class="h-3 rounded" :class="botRatio > 40 ? 'bg-red-500' : botRatio > 20 ? 'bg-yellow-500' : 'bg-green-500'" :style="'width:' + Math.min(botRatio, 100) + '%'"></div>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Adaptive PoW Level</p>
+        <p class="text-2xl font-bold text-blue-600" x-text="difficulty">4</p>
+        <p class="text-xs text-gray-400 mt-1">Auto-adjusts based on threat</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Learning Samples</p>
+        <p class="text-2xl font-bold text-purple-600" x-text="learningSamples">0</p>
+        <p class="text-xs text-gray-400 mt-1">Model improves with data</p>
+      </div>
     </div>
     <div class="bg-white rounded shadow p-4 mt-4">
       <p class="text-sm text-gray-600">Suspicious sessions in last 24h: <span class="font-semibold" x-text="suspiciousCount">0</span></p>
+    </div>
+  </div>`;
+}
+
+export function threatContent(): string {
+  return `<div x-data="{ loading: true, threat: {}, learning: {}, sigs: {} }" x-init="Promise.all([fetch('/admin/api/threat').then(r=>r.json()), fetch('/admin/api/learning').then(r=>r.json()), fetch('/admin/api/signatures').then(r=>r.json())]).then(([t,l,s])=>{threat=t; learning=l; sigs=s}).finally(()=>loading=false)">
+    <template x-if="loading"><p class="text-gray-500">Loading...</p></template>
+
+    <h3 class="text-lg font-bold mb-3">Adaptive Threat Level</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Bot Ratio (10min)</p>
+        <p class="text-2xl font-bold" :class="threat.botRatio > 40 ? 'text-red-600' : 'text-green-600'" x-text="(threat.botRatio || 0) + '%'">0%</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Current PoW Difficulty</p>
+        <p class="text-2xl font-bold text-blue-600" x-text="threat.difficulty || 4">4</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Known Bot Signatures</p>
+        <p class="text-2xl font-bold text-orange-600" x-text="sigs.total || 0">0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <p class="text-gray-500 text-sm">Bot Sessions (10min)</p>
+        <p class="text-2xl font-bold text-red-600" x-text="threat.botCount || 0">0</p>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-bold mb-3">ML Learning Progress</h3>
+    <div class="bg-white rounded shadow p-4 mb-6">
+      <template x-if="Object.keys(learning).length === 0"><p class="text-gray-400 text-sm">No learning data yet. Model starts learning after 10+ human sessions.</p></template>
+      <table class="w-full text-sm">
+        <thead class="bg-gray-100">
+          <tr><th class="p-2 text-left">Signal</th><th class="p-2 text-left">Mean</th><th class="p-2 text-left">Std Dev</th><th class="p-2 text-left">Samples</th><th class="p-2 text-left">Status</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="(val, key) in learning" :key="key">
+            <tr class="border-t">
+              <td class="p-2 font-mono text-xs" x-text="key"></td>
+              <td class="p-2" x-text="val.mean"></td>
+              <td class="p-2" x-text="val.stddev"></td>
+              <td class="p-2" x-text="val.count"></td>
+              <td class="p-2">
+                <span class="px-2 py-1 rounded text-xs" :class="val.count >= 10 ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'" x-text="val.count >= 10 ? 'Active' : 'Learning...'"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="text-lg font-bold mb-3">Top Bot Signatures</h3>
+    <div class="bg-white rounded shadow p-4">
+      <template x-if="!sigs.topHits || sigs.topHits.length === 0"><p class="text-gray-400 text-sm">No bot signatures recorded yet.</p></template>
+      <table x-if="sigs.topHits && sigs.topHits.length > 0" class="w-full text-sm">
+        <thead class="bg-gray-100">
+          <tr><th class="p-2 text-left">Hash</th><th class="p-2 text-left">Type</th><th class="p-2 text-left">Hits</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="hit in (sigs.topHits || [])" :key="hit.hash + hit.type">
+            <tr class="border-t">
+              <td class="p-2 font-mono text-xs" x-text="hit.hash.slice(0,12) + '...'"></td>
+              <td class="p-2"><span class="px-2 py-1 rounded text-xs" :class="hit.type === 'ip' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'" x-text="hit.type === 'ip' ? 'IP' : 'UA'"></span></td>
+              <td class="p-2 font-bold" x-text="hit.count"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
     </div>
   </div>`;
 }
@@ -94,12 +184,17 @@ export function flaggedContent(): string {
 }
 
 export function settingsContent(): string {
-  return `<div x-data="{ difficulty: 4, saving: false, saved: false }" x-init="fetch('/admin/api/settings').then(r=>r.json()).then(d=>difficulty=d.difficulty ?? 4)">
-    <form @submit.prevent="saving=true; saved=false; fetch('/admin/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({difficulty})}).then(r=>r.json()).then(d=>{difficulty=d.difficulty; saved=true;}).finally(()=>saving=false)" class="bg-white p-6 rounded shadow max-w-md">
+  return `<div x-data="{ difficulty: 4, adaptiveEnabled: true, saving: false, saved: false }" x-init="fetch('/admin/api/settings').then(r=>r.json()).then(d=>{difficulty=d.difficulty ?? 4; adaptiveEnabled=d.adaptiveEnabled ?? true})">
+    <form @submit.prevent="saving=true; saved=false; fetch('/admin/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({difficulty, adaptiveEnabled})}).then(r=>r.json()).then(d=>{difficulty=d.difficulty; saved=true;}).finally(()=>saving=false)" class="bg-white p-6 rounded shadow max-w-md">
       <h3 class="text-lg font-bold mb-4">Settings</h3>
       <label class="block mb-4">
-        <span class="text-gray-700">PoW Difficulty (1–6, higher = harder)</span>
+        <span class="text-gray-700">PoW Difficulty (1-6)</span>
         <input type="number" x-model="difficulty" min="1" max="6" class="border p-2 w-full mt-1">
+        <p class="text-xs text-gray-400 mt-1">Auto-adjusted by Adaptive PoW when enabled</p>
+      </label>
+      <label class="flex items-center gap-2 mb-4">
+        <input type="checkbox" x-model="adaptiveEnabled" class="rounded">
+        <span class="text-gray-700">Adaptive PoW (auto-adjust difficulty)</span>
       </label>
       <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded" :disabled="saving">
         <span x-text="saving ? 'Saving...' : 'Save'"></span>

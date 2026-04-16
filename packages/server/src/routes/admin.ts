@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db, getPowDifficulty, setPowDifficulty } from '../db.js';
-import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent } from '../admin-ui.js';
+import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent } from '../admin-ui.js';
+import { getLearningStatus } from '../services/adaptive.js';
+import { getThreatStatus } from '../services/adaptivePow.js';
+import { getBotSignatureStats, cleanupOldSignatures } from '../services/botSignatures.js';
 import crypto from 'crypto';
 import { config } from '../config.js';
 
@@ -77,6 +80,11 @@ export function adminRoutes(app: FastifyInstance) {
     return rep.type('text/html').send(adminLayout('Stats', statsContent(), 'stats'));
   });
 
+  app.get('/admin/threat', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return rep.type('text/html').send(adminLayout('Threat Intelligence', threatContent(), 'threat'));
+  });
+
   app.get('/admin/flagged', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
     return rep.type('text/html').send(adminLayout('Flagged Sessions', flaggedContent(), 'flagged'));
@@ -97,13 +105,36 @@ export function adminRoutes(app: FastifyInstance) {
     const suspicious = (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE created_at >= ? AND verdict='suspicious'").get(since) as { c: number }).c;
     const avg = (db.prepare('SELECT AVG(final_score) as a FROM sessions WHERE created_at >= ? AND final_score > 0').get(since) as { a: number | null }).a ?? 0;
 
+    const threat = getThreatStatus();
+    const learning = getLearningStatus();
+    const maxSample = Math.max(...Object.values(learning).map(s => s.count), 0);
+
     return {
       totalSessions: total,
       humanCount: human,
       botCount: bot,
       suspiciousCount: suspicious,
       avgScore: avg,
+      botRatio: threat.botRatio,
+      difficulty: threat.difficulty,
+      learningSamples: maxSample,
     };
+  });
+
+  app.get('/admin/api/threat', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return getThreatStatus();
+  });
+
+  app.get('/admin/api/learning', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return getLearningStatus();
+  });
+
+  app.get('/admin/api/signatures', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    cleanupOldSignatures();
+    return getBotSignatureStats();
   });
 
   app.get('/admin/api/flagged', async (req, rep) => {

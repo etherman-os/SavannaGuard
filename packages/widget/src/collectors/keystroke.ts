@@ -14,7 +14,7 @@ interface KeystrokeEvent {
 
 export async function collectKeystrokeData(): Promise<KeystrokeData> {
   const events: KeystrokeEvent[] = [];
-  const COLLECTION_MS = 4000;
+  const collectionMs = 3500 + Math.floor(Math.random() * 2000);
 
   const downHandler = (e: KeyboardEvent) => {
     events.push({ type: 'down', key: e.key, time: Date.now() });
@@ -27,7 +27,7 @@ export async function collectKeystrokeData(): Promise<KeystrokeData> {
   document.addEventListener('keydown', downHandler, { passive: true });
   document.addEventListener('keyup', upHandler, { passive: true });
 
-  await new Promise((resolve) => setTimeout(resolve, COLLECTION_MS));
+  await new Promise((resolve) => setTimeout(resolve, collectionMs));
 
   document.removeEventListener('keydown', downHandler);
   document.removeEventListener('keyup', upHandler);

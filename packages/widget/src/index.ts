@@ -118,7 +118,7 @@ async function run(apiUrl: string): Promise<void> {
   resetTiming();
   currentApiUrl = apiUrl;
 
-  const { challengeId, nonce, difficulty, sessionId } = await createChallenge();
+  const { challengeId, nonce, difficulty, sessionId, obfKey } = await createChallenge();
 
   const worker = new Worker(new URL('./pow.worker.ts', import.meta.url), { type: 'module' });
   try {
@@ -136,7 +136,7 @@ async function run(apiUrl: string): Promise<void> {
 
     const behavioral = await collectAllBehavioralData();
 
-    const result = await solveChallenge(challengeId, solution, sessionId, behavioral);
+    const result = await solveChallenge(challengeId, solution, sessionId, behavioral, obfKey);
     pendingToken = result.token ?? null;
     flushPending(pendingToken);
   } finally {

@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db, getPowDifficulty, setPowDifficulty } from '../db.js';
-import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent, federationContent } from '../admin-ui.js';
+import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent, federationContent, vpnContent, mobileContent, multiTenantContent } from '../admin-ui.js';
 import { getLearningStatus } from '../services/adaptive.js';
 import { getThreatStatus } from '../services/adaptivePow.js';
 import { getBotSignatureStats, cleanupOldSignatures } from '../services/botSignatures.js';
+import { getPassiveProtectionStats } from '../services/passiveProtection.js';
 import crypto from 'crypto';
 import { config } from '../config.js';
 
@@ -52,6 +53,16 @@ function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
   return false;
 }
 
+function requireAdminCsrf(request: FastifyRequest, reply: FastifyReply): boolean {
+  if (!requireAdmin(request, reply)) return false;
+  const header = request.headers['x-requested-with'] ?? '';
+  if (typeof header !== 'string' || header !== 'SavannaAdmin') {
+    reply.status(403).send({ error: 'Forbidden' });
+    return false;
+  }
+  return true;
+}
+
 export function adminRoutes(app: FastifyInstance) {
   app.get('/admin/login', async (_req, rep) => {
     return rep.type('text/html').send(loginPage());
@@ -64,6 +75,7 @@ export function adminRoutes(app: FastifyInstance) {
         path: '/',
         httpOnly: true,
         sameSite: 'strict',
+        secure: process.env.NODE_ENV === 'production',
       });
       return rep.redirect('/admin');
     }
@@ -100,6 +112,21 @@ export function adminRoutes(app: FastifyInstance) {
     return rep.type('text/html').send(adminLayout('Federation', federationContent(), 'federation'));
   });
 
+  app.get('/admin/vpn', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return rep.type('text/html').send(adminLayout('VPN Detection', vpnContent(), 'vpn'));
+  });
+
+  app.get('/admin/mobile', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return rep.type('text/html').send(adminLayout('Mobile SDK', mobileContent(), 'mobile'));
+  });
+
+  app.get('/admin/multi-tenant', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return rep.type('text/html').send(adminLayout('Multi-Tenant', multiTenantContent(), 'multi-tenant'));
+  });
+
   app.get('/admin/api/stats', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
 
@@ -124,6 +151,58 @@ export function adminRoutes(app: FastifyInstance) {
       difficulty: threat.difficulty,
       learningSamples: maxSample,
     };
+  });
+
+  app.get('/admin/api/stats/timeseries', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+
+    const now = Date.now();
+    const since = now - 24 * 60 * 60 * 1000;
+
+    const rows = db.prepare(
+      `SELECT
+        (created_at / 3600000) * 3600000 AS hour_bucket,
+        COUNT(*) AS total,
+        SUM(CASE WHEN verdict='human' THEN 1 ELSE 0 END) AS human,
+        SUM(CASE WHEN verdict='bot' THEN 1 ELSE 0 END) AS bot,
+        SUM(CASE WHEN verdict='suspicious' THEN 1 ELSE 0 END) AS suspicious
+      FROM sessions
+      WHERE created_at >= ?
+      GROUP BY hour_bucket
+      ORDER BY hour_bucket`
+    ).all(since) as Array<{
+      hour_bucket: number;
+      total: number;
+      human: number;
+      bot: number;
+      suspicious: number;
+    }>;
+
+    const dataMap = new Map<number, { timestamp: number; human: number; bot: number; suspicious: number; total: number }>();
+    for (const row of rows) {
+      dataMap.set(row.hour_bucket, {
+        timestamp: row.hour_bucket,
+        human: row.human,
+        bot: row.bot,
+        suspicious: row.suspicious,
+        total: row.total,
+      });
+    }
+
+    const hourly: Array<{ timestamp: number; human: number; bot: number; suspicious: number; total: number }> = [];
+    for (let i = 23; i >= 0; i--) {
+      const ts = Math.floor((now - i * 3600000) / 3600000) * 3600000;
+      const entry = dataMap.get(ts);
+      hourly.push(entry ?? { timestamp: ts, human: 0, bot: 0, suspicious: 0, total: 0 });
+    }
+
+    const verdicts = {
+      human: (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE created_at >= ? AND verdict='human'").get(since) as { c: number }).c,
+      bot: (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE created_at >= ? AND verdict='bot'").get(since) as { c: number }).c,
+      suspicious: (db.prepare("SELECT COUNT(*) as c FROM sessions WHERE created_at >= ? AND verdict='suspicious'").get(since) as { c: number }).c,
+    };
+
+    return { hourly, verdicts };
   });
 
   app.get('/admin/api/threat', async (req, rep) => {
@@ -166,7 +245,7 @@ export function adminRoutes(app: FastifyInstance) {
   });
 
   app.post('/admin/settings', async (req, rep) => {
-    if (!requireAdmin(req, rep)) return;
+    if (!requireAdminCsrf(req, rep)) return;
 
     const requestedDifficulty = readDifficultyFromBody(req.body);
     if (requestedDifficulty === null) {
@@ -175,5 +254,10 @@ export function adminRoutes(app: FastifyInstance) {
 
     const savedDifficulty = setPowDifficulty(requestedDifficulty);
     return { ok: true, difficulty: savedDifficulty };
+  });
+
+  app.get('/admin/api/passive-protection', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    return getPassiveProtectionStats();
   });
 }

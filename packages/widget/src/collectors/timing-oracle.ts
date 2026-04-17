@@ -4,55 +4,51 @@
  * Detects headless browsers (Puppeteer, Playwright, Selenium) by measuring
  * timing characteristics that differ between real browsers and automation tools.
  *
- * Detection signals:
- * - performance.now() monotonicity
- * - setTimeout accuracy drift
- * - crypto.subtle operation timing
- * - V8 JIT compilation pattern variance
- * - requestAnimationFrame latency variance
+ * Anti-evasion: Measurement values include random jitter (±10-20%) and
+ * collection order is randomized. This prevents replay attacks where a bot
+ * records deterministic timing values and replays them verbatim.
  */
 
 export interface TimingOracleData {
-  // Timer accuracy tests
   performanceNowMonotonic: boolean;
   setTimeoutDriftMs: number;
   dateNowVsPerformanceNowDriftMs: number;
-
-  // Crypto timing (deterministic in real browsers)
   cryptoSignTimingMs: number;
   cryptoDeriveTimingMs: number;
-
-  // V8 JIT pattern detection
   hotFunctionTimings: number[];
   jitPatternVariance: number;
   polymorphicCallTimingMs: number;
-
-  // RAF behavior
   rafLatencyVarianceMs: number;
   rafFrameBudgetRatio: number;
-
-  // Composite detection
   headlessLikelihood: number;
   detectionSignals: string[];
 }
 
-// Threshold constants
-const HEADLESS_JIT_VARIANCE_THRESHOLD = 0.5; // Lower variance = automated
-const HEADLESS_RAF_VARIANCE_THRESHOLD = 2.0; // Higher variance = real browser
+const HEADLESS_JIT_VARIANCE_THRESHOLD = 0.5;
+const HEADLESS_RAF_VARIANCE_THRESHOLD = 2.0;
 
-// Hot function for JIT pattern detection
-// This specific pattern triggers different V8 optimization behavior
+function jitter(value: number, percent: number): number {
+  if (value === 0) return 0;
+  const noise = value * (percent / 100) * (Math.random() * 2 - 1);
+  return Math.max(0, value + noise);
+}
+
+function shuffleArray<T>(array: T[]): T[] {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
 function createHotFunction() {
   const cache: Array<{ type: string; value: number }> = [];
 
   return function hotFunction(obj: { type: string; value: number }) {
-    // Polymorphic inline cache bypass pattern
-    // Real JIT recompiles, headless often doesn't
     const polymorphicPenalty = cache.length > 0 && cache[0].type !== obj.type ? 1 : 0;
     cache.push(obj);
     if (cache.length > 10) cache.shift();
 
-    // Mathematical operations that JIT handles differently
     let result = 0;
     for (let i = 0; i < 100; i++) {
       result += Math.sqrt(obj.value + i) * Math.sin(i);
@@ -61,7 +57,6 @@ function createHotFunction() {
   };
 }
 
-// Generate type-alternating objects for IC bypass
 function getTypeAlternatingObject(index: number): { type: string; value: number } {
   return index % 2 === 0
     ? { type: 'A', value: index }
@@ -85,151 +80,184 @@ export async function collectTimingOracle(): Promise<TimingOracleData> {
   };
 
   try {
-  const detectionSignals: string[] = [];
-  let headlessScore = 0;
-  let signalCount = 0;
+    const detectionSignals: string[] = [];
+    let headlessScore = 0;
+    let signalCount = 0;
 
-  // ============================================
-  // 1. Timer Accuracy Tests
-  // ============================================
+    let perfNowMonotonic = true;
+    let setTimeoutDrift = 0;
+    let datePerfDrift = 0;
+    let cryptoTimings = { signTimingMs: 0, deriveTimingMs: 0 };
+    let cryptoTimingAvailable = false;
+    let hotFunctionTimings: number[] = [];
+    let jitPatternVariance = 0;
+    let polymorphicTiming = 0;
+    let rafLatencyVariance = 0;
+    let rafFrameBudgetRatio = 1;
+    let rafMetricsAvailable = false;
 
-  // Test performance.now() monotonicity
-  const perfNowSamples: number[] = [];
-  let perfNowMonotonic = true;
-  let previousAfter = -Infinity;
-  for (let i = 0; i < 10; i++) {
-    const before = performance.now();
-    // eslint-disable-next-line no-empty
-    while (performance.now() === before) {}
-    const after = performance.now();
-    perfNowSamples.push(after - before);
-    if (after < previousAfter) {
-      perfNowMonotonic = false;
-    }
-    previousAfter = after;
-  }
-  if (!perfNowMonotonic) {
-    detectionSignals.push('perfNowNonMonotonic');
-    headlessScore += 30;
-  }
-  signalCount++;
+    type SectionResult = {
+      type: string;
+      run: () => void;
+    };
 
-  // Test setTimeout accuracy
-  const setTimeoutDrift = await measureSetTimeoutDrift();
-  if (Math.abs(setTimeoutDrift) > 10) {
-    detectionSignals.push('setTimeoutDrift');
-    headlessScore += 20;
-  }
-  signalCount++;
+    const sections: SectionResult[] = shuffleArray([
+      {
+        type: 'timerAccuracy',
+        run: () => {
+          performance.now();
+          const samples: number[] = [];
+          let previousAfter = -Infinity;
+          for (let i = 0; i < 10; i++) {
+            const before = performance.now();
+            // eslint-disable-next-line no-empty
+            while (performance.now() === before) {}
+            const after = performance.now();
+            samples.push(after - before);
+            if (after < previousAfter) {
+              perfNowMonotonic = false;
+            }
+            previousAfter = after;
+          }
+          if (!perfNowMonotonic) {
+            detectionSignals.push('perfNowNonMonotonic');
+            headlessScore += 30;
+          }
+          signalCount++;
+        },
+      },
+      {
+        type: 'cryptoTiming',
+        run: () => {
+          // Synchronous measurement (crypto timing was already awaited above)
+          if (cryptoTimingAvailable && cryptoTimings.signTimingMs < 1.5) {
+            detectionSignals.push('cryptoTooFast');
+            headlessScore += 25;
+          }
+          signalCount++;
+        },
+      },
+      {
+        type: 'jitPattern',
+        run: () => {
+          const hotFn = createHotFunction();
+          for (let i = 0; i < 5; i++) {
+            const start = performance.now();
+            hotFn(getTypeAlternatingObject(i));
+            hotFunctionTimings.push(performance.now() - start);
+          }
+          // Apply jitter to each timing measurement
+          hotFunctionTimings = hotFunctionTimings.map(t => jitter(t, 10));
 
-  // Test Date.now() vs performance.now() drift
-  const datePerfDrift = measureDateNowVsPerformanceNowDrift();
-  if (Math.abs(datePerfDrift) > 50) {
-    detectionSignals.push('datePerfDrift');
-    headlessScore += 15;
-  }
-  signalCount++;
+          jitPatternVariance = jitter(calculateVariance(hotFunctionTimings), 15);
+          if (calculateVariance(hotFunctionTimings) < HEADLESS_JIT_VARIANCE_THRESHOLD) {
+            detectionSignals.push('jitLowVariance');
+            headlessScore += 35;
+          }
+          signalCount++;
+        },
+      },
+      {
+        type: 'polymorphic',
+        run: () => {
+          polymorphicTiming = jitter(measurePolymorphicCalls(), 15);
+          if (polymorphicTiming < 0.5) {
+            detectionSignals.push('polymorphicTooFast');
+            headlessScore += 20;
+          }
+          signalCount++;
+        },
+      },
+      {
+        type: 'raf',
+        run: () => {
+          if (rafMetricsAvailable) {
+            rafLatencyVariance = jitter(rafLatencyVariance, 15);
+            rafFrameBudgetRatio = jitter(rafFrameBudgetRatio, 10);
+            if (rafLatencyVariance < HEADLESS_RAF_VARIANCE_THRESHOLD) {
+              detectionSignals.push('rafLowVariance');
+              headlessScore += 20;
+            }
+            if (rafFrameBudgetRatio < 0.3) {
+              detectionSignals.push('rafFrameBudgetLow');
+              headlessScore += 15;
+            }
+          }
+          signalCount++;
+        },
+      },
+    ]);
 
-  // ============================================
-  // 2. Crypto Timing Tests
-  // ============================================
+    const asyncMeasurements = await Promise.all([
+      measureSetTimeoutDrift(),
+      measureDateNowVsPerformanceNowDrift(),
+      measureCryptoTiming(),
+      measureRAFBehavior(),
+    ]);
 
-  let cryptoTimings = { signTimingMs: 0, deriveTimingMs: 0 };
-  let cryptoTimingAvailable = false;
-  try {
-    cryptoTimings = await measureCryptoTiming();
+    setTimeoutDrift = jitter(asyncMeasurements[0], 15);
+    datePerfDrift = jitter(asyncMeasurements[1], 15);
+    cryptoTimings = asyncMeasurements[2];
+    cryptoTimings = {
+      signTimingMs: jitter(cryptoTimings.signTimingMs, 20),
+      deriveTimingMs: jitter(cryptoTimings.deriveTimingMs, 20),
+    };
     cryptoTimingAvailable = true;
-  } catch {
-    detectionSignals.push('cryptoUnavailable');
-    headlessScore += 5;
-  }
-  // Crypto in headless is often faster due to no sandbox overhead
-  if (cryptoTimingAvailable && cryptoTimings.signTimingMs < 1.5) {
-    detectionSignals.push('cryptoTooFast');
-    headlessScore += 25;
-  }
-  signalCount++;
 
-  // ============================================
-  // 3. V8 JIT Pattern Detection
-  // ============================================
+    if (asyncMeasurements[3]) {
+      rafLatencyVariance = asyncMeasurements[3].latencyVariance;
+      rafFrameBudgetRatio = asyncMeasurements[3].frameBudgetRatio;
+      rafMetricsAvailable = true;
+    }
 
-  const hotFn = createHotFunction();
-  const hotFunctionTimings: number[] = [];
+    // Warm up hot function before JIT section reads it
+    const warmFn = createHotFunction();
+    for (let i = 0; i < 20; i++) {
+      warmFn(getTypeAlternatingObject(i));
+    }
 
-  // Warm up phase
-  for (let i = 0; i < 20; i++) {
-    hotFn(getTypeAlternatingObject(i));
-  }
+    for (const section of sections) {
+      section.run();
+    }
 
-  // Measure phase - timing of hot function calls
-  for (let i = 0; i < 5; i++) {
-    const start = performance.now();
-    hotFn(getTypeAlternatingObject(i));
-    hotFunctionTimings.push(performance.now() - start);
-  }
+    // detection signals from async measurements
+    if (Math.abs(asyncMeasurements[0]) > 10) {
+      detectionSignals.push('setTimeoutDrift');
+      headlessScore += 20;
+    }
+    if (Math.abs(asyncMeasurements[1]) > 50) {
+      detectionSignals.push('datePerfDrift');
+      headlessScore += 15;
+    }
+    if (!cryptoTimingAvailable || (cryptoTimingAvailable && asyncMeasurements[2].signTimingMs < 1.5)) {
+      if (!cryptoTimingAvailable) {
+        detectionSignals.push('cryptoUnavailable');
+        headlessScore += 5;
+      }
+    }
+    if (!rafMetricsAvailable) {
+      detectionSignals.push('rafUnavailable');
+      headlessScore += 5;
+    }
 
-  const jitPatternVariance = calculateVariance(hotFunctionTimings);
-  // Headless browsers show suspiciously low variance
-  if (jitPatternVariance < HEADLESS_JIT_VARIANCE_THRESHOLD) {
-    detectionSignals.push('jitLowVariance');
-    headlessScore += 35;
-  }
-  signalCount++;
+    const headlessLikelihood = signalCount > 0
+      ? Math.min(100, Math.round(headlessScore))
+      : 0;
 
-  // Polymorphic call timing
-  const polymorphicTiming = await measurePolymorphicCalls();
-  if (polymorphicTiming < 0.5) {
-    detectionSignals.push('polymorphicTooFast');
-    headlessScore += 20;
-  }
-  signalCount++;
-
-  // ============================================
-  // 4. requestAnimationFrame Behavior
-  // ============================================
-
-  let rafMetrics = { latencyVariance: 0, frameBudgetRatio: 1 };
-  let rafMetricsAvailable = false;
-  try {
-    rafMetrics = await measureRAFBehavior();
-    rafMetricsAvailable = true;
-  } catch {
-    detectionSignals.push('rafUnavailable');
-    headlessScore += 5;
-  }
-  if (rafMetricsAvailable && rafMetrics.latencyVariance < HEADLESS_RAF_VARIANCE_THRESHOLD) {
-    detectionSignals.push('rafLowVariance');
-    headlessScore += 20;
-  }
-  if (rafMetricsAvailable && rafMetrics.frameBudgetRatio < 0.3) {
-    detectionSignals.push('rafFrameBudgetLow');
-    headlessScore += 15;
-  }
-  signalCount++;
-
-  // ============================================
-  // 5. Composite Score
-  // ============================================
-
-  const headlessLikelihood = signalCount > 0
-    ? Math.min(100, Math.round(headlessScore))
-    : 0;
-
-  return {
-    performanceNowMonotonic: perfNowMonotonic,
-    setTimeoutDriftMs: setTimeoutDrift,
-    dateNowVsPerformanceNowDriftMs: datePerfDrift,
-    cryptoSignTimingMs: cryptoTimings.signTimingMs,
-    cryptoDeriveTimingMs: cryptoTimings.deriveTimingMs,
-    hotFunctionTimings,
-    jitPatternVariance,
-    polymorphicCallTimingMs: polymorphicTiming,
-    rafLatencyVarianceMs: rafMetrics.latencyVariance,
-    rafFrameBudgetRatio: rafMetrics.frameBudgetRatio,
-    headlessLikelihood,
-    detectionSignals,
-  };
+    return {
+      performanceNowMonotonic: perfNowMonotonic,
+      setTimeoutDriftMs: parseFloat(setTimeoutDrift.toFixed(2)),
+      dateNowVsPerformanceNowDriftMs: parseFloat(datePerfDrift.toFixed(2)),
+      cryptoSignTimingMs: parseFloat(cryptoTimings.signTimingMs.toFixed(3)),
+      cryptoDeriveTimingMs: parseFloat(cryptoTimings.deriveTimingMs.toFixed(3)),
+      hotFunctionTimings: hotFunctionTimings.map(t => parseFloat(t.toFixed(3))),
+      jitPatternVariance: parseFloat(jitPatternVariance.toFixed(3)),
+      polymorphicCallTimingMs: parseFloat(polymorphicTiming.toFixed(3)),
+      rafLatencyVarianceMs: parseFloat(rafLatencyVariance.toFixed(3)),
+      rafFrameBudgetRatio: parseFloat(rafFrameBudgetRatio.toFixed(3)),
+      headlessLikelihood,
+      detectionSignals,
+    };
   } catch {
     return {
       ...fallback,
@@ -239,7 +267,6 @@ export async function collectTimingOracle(): Promise<TimingOracleData> {
   }
 }
 
-// Helper: Measure setTimeout drift
 function measureSetTimeoutDrift(): Promise<number> {
   return new Promise((resolve) => {
     const expectedMs = 10;
@@ -251,7 +278,6 @@ function measureSetTimeoutDrift(): Promise<number> {
   });
 }
 
-// Helper: Measure Date.now() vs performance.now() drift
 function measureDateNowVsPerformanceNowDrift(): number {
   const startPerf = performance.now();
   const startDate = Date.now();
@@ -264,7 +290,6 @@ function measureDateNowVsPerformanceNowDrift(): number {
   return dateElapsed - perfElapsed;
 }
 
-// Helper: Measure crypto operation timing
 async function measureCryptoTiming(): Promise<{ signTimingMs: number; deriveTimingMs: number }> {
   if (!crypto?.subtle) {
     throw new Error('WebCrypto subtle API unavailable');
@@ -279,7 +304,6 @@ async function measureCryptoTiming(): Promise<{ signTimingMs: number; deriveTimi
   const data = new Uint8Array(128);
   crypto.getRandomValues(data);
 
-  // ECDSA sign timing
   const signStart = performance.now();
   await crypto.subtle.sign(
     { name: 'ECDSA', hash: { name: 'SHA-256' } },
@@ -288,7 +312,6 @@ async function measureCryptoTiming(): Promise<{ signTimingMs: number; deriveTimi
   );
   const signTimingMs = performance.now() - signStart;
 
-  // HKDF derive timing
   const hkdfKey = await crypto.subtle.importKey(
     'raw',
     data,
@@ -307,10 +330,8 @@ async function measureCryptoTiming(): Promise<{ signTimingMs: number; deriveTimi
   return { signTimingMs, deriveTimingMs };
 }
 
-// Helper: Measure polymorphic call timing
-async function measurePolymorphicCalls(): Promise<number> {
+function measurePolymorphicCalls(): number {
   const hotFn = createHotFunction();
-  // Warm up
   for (let i = 0; i < 50; i++) {
     hotFn(getTypeAlternatingObject(i % 10));
   }
@@ -326,10 +347,9 @@ async function measurePolymorphicCalls(): Promise<number> {
   return calculateMean(timings);
 }
 
-// Helper: Measure requestAnimationFrame behavior
-async function measureRAFBehavior(): Promise<{ latencyVariance: number; frameBudgetRatio: number }> {
+async function measureRAFBehavior(): Promise<{ latencyVariance: number; frameBudgetRatio: number } | null> {
   if (typeof requestAnimationFrame !== 'function') {
-    throw new Error('requestAnimationFrame unavailable');
+    return null;
   }
 
   const latencies: number[] = [];
@@ -337,7 +357,7 @@ async function measureRAFBehavior(): Promise<{ latencyVariance: number; frameBud
   let completed = 0;
   let lastTimestamp: number | null = null;
 
-  const expectedFrameTime = 16.67; // 60fps
+  const expectedFrameTime = 16.67;
 
   return new Promise((resolve) => {
     function measureRAF(timestamp: number) {
@@ -363,7 +383,6 @@ async function measureRAFBehavior(): Promise<{ latencyVariance: number; frameBud
   });
 }
 
-// Helper: Calculate variance
 function calculateVariance(values: number[]): number {
   if (values.length === 0) return 0;
   const mean = calculateMean(values);
@@ -371,7 +390,6 @@ function calculateVariance(values: number[]): number {
   return Math.sqrt(squaredDiffs.reduce((a, b) => a + b, 0) / values.length);
 }
 
-// Helper: Calculate mean
 function calculateMean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((a, b) => a + b, 0) / values.length;

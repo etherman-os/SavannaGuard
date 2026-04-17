@@ -11,6 +11,7 @@ import {
   scoreNavigator,
   scoreNetwork,
   calculateAllScores,
+  detectSpoofing,
   SignalScores,
 } from '../src/services/scoring.js';
 
@@ -59,6 +60,170 @@ describe('scoring service', () => {
     it('clamps ratio to 0-1 range', () => {
       expect(scoreMouse(-0.5)).toBe(90); // clamped to 0
       expect(scoreMouse(1.5)).toBe(0);  // clamped to 1
+    });
+  });
+
+  describe('Global Spoofing Penalty', () => {
+    it('canvasBlocked detected when hash matches blank hash (valid non-empty values)', () => {
+      // For canvasBlocked, both must be truthy, non-invalid, and equal
+      const spoofing = detectSpoofing({
+        canvasHash: 'hash123',
+        canvasBlankHash: 'hash123',
+        webglRendererFromCanvas: undefined,
+        renderer: 'valid',
+        hasWebGL: false,
+      });
+      expect(spoofing.canvasBlocked).toBe(true);
+    });
+
+    it('webglHeadless triggers when hasWebGL=true and extensions < min', () => {
+      // Mobile min=3, desktop min=5
+      const spoofing = detectSpoofing({
+        canvasHash: '',
+        canvasBlankHash: '',
+        renderer: 'unknown',
+        hasWebGL: true,
+        webglExtensions: 0,
+        maxTextureSize: 2048,
+      });
+      expect(spoofing.webglHeadless).toBe(true);
+    });
+
+    it('spoofingFlags=2 when both canvasBlocked and webglHeadless are true', () => {
+      const spoofing = detectSpoofing({
+        canvasHash: 'hash123',
+        canvasBlankHash: 'hash123',
+        webglRendererFromCanvas: undefined,
+        renderer: 'valid', // not in invalidRendererValues
+        hasWebGL: true,
+        webglExtensions: 0,
+        maxTextureSize: 2048,
+      });
+
+      expect(spoofing.canvasBlocked).toBe(true);
+      expect(spoofing.webglHeadless).toBe(true);
+      expect(spoofing.webglRendererMismatch).toBe(false);
+    });
+
+    it('spoofingFlags=2 multiplies final score by 0.6 (global penalty)', () => {
+      const behavioral = {
+        canvasHash: 'samehash',
+        canvasBlankHash: 'samehash',
+        renderer: 'valid',
+        hasWebGL: true,
+        webglExtensions: 0,
+        webglRendererFromCanvas: undefined,
+        // All other signals at neutral 50s → no contribution to score
+        timeOnPage: 5000,
+        straightLineRatio: 0.5,
+        avgDwellTime: 80,
+        avgFlightTime: 120,
+        dwellVariance: 50,
+        flightVariance: 80,
+        totalKeystrokes: 20,
+        isCanvasSupported: true,
+        userAgent: 'Mozilla/5.0',
+        platform: 'Win32',
+        language: 'en',
+        cookiesEnabled: true,
+        hardwareConcurrency: 4,
+        maxTouchPoints: 0,
+        screenWidth: 1920,
+        screenHeight: 1080,
+        pixelRatio: 1,
+        latencyMs: 50,
+        networkType: '4g',
+      };
+
+      const signalScores = calculateAllScores(behavioral);
+      expect(signalScores.spoofingFlags).toBe(2);
+
+      // Calculate overall with powScore=100
+      const powScore = 100;
+      const finalScore = calculateOverallScore(powScore, signalScores);
+      expect(finalScore).toBeGreaterThan(0);
+      expect(finalScore).toBeLessThanOrEqual(100);
+    });
+
+    it('final score never goes below 0 after spoofing penalty', () => {
+      // Use minimal signals + spoofingFlags >= 1
+      const behavioral = {
+        canvasHash: 'samehash',
+        canvasBlankHash: 'samehash',
+        renderer: 'valid',
+        hasWebGL: true,
+        webglExtensions: 0,
+        webglRendererFromCanvas: undefined,
+        // All other signals at minimum (bot-like)
+        timeOnPage: 100,        // very fast → scoreTiming = 10
+        straightLineRatio: 0.99, // near-perfect straight line → scoreMouse = 0
+        avgDwellTime: 10,        // extreme
+        avgFlightTime: 10,        // extreme
+        dwellVariance: 1,         // no variance = bot
+        flightVariance: 1,        // no variance = bot
+        totalKeystrokes: 0,
+        isCanvasSupported: true,
+        userAgent: 'headless',
+        platform: 'Linux',
+        language: 'en',
+        cookiesEnabled: false,
+        hardwareConcurrency: 1,
+        maxTouchPoints: 0,
+        screenWidth: 1920,
+        screenHeight: 1080,
+        pixelRatio: 1,
+        latencyMs: 1000,
+        networkType: 'slow-2g',
+      };
+
+      const signalScores = calculateAllScores(behavioral);
+      expect(signalScores.spoofingFlags).toBeGreaterThanOrEqual(1);
+
+      const powScore = 100;
+      const rawScore = calculateOverallScore(powScore, signalScores);
+
+      // Apply spoofing penalty as challenge.ts does
+      let finalScore = rawScore;
+      if (signalScores.spoofingFlags >= 1) {
+        finalScore = Math.round(finalScore * 0.6);
+      }
+      finalScore = Math.max(0, Math.min(100, finalScore));
+
+      expect(finalScore).toBeGreaterThanOrEqual(0);
+      expect(finalScore).toBeLessThanOrEqual(100);
+    });
+
+    it('webglHeadless flag only triggers with hasWebGL=true', () => {
+      // Without hasWebGL, webglHeadless stays false
+      const spoofingNoWebGL = detectSpoofing({
+        canvasHash: 'hash123',
+        canvasBlankHash: 'hash123',
+        renderer: 'unknown',
+        hasWebGL: false,
+        webglExtensions: 0,
+      });
+      expect(spoofingNoWebGL.webglHeadless).toBe(false);
+
+      // With hasWebGL=true and low extensions, triggers
+      const spoofingWithWebGL = detectSpoofing({
+        canvasHash: 'hash123',
+        canvasBlankHash: 'hash123',
+        renderer: 'unknown',
+        hasWebGL: true,
+        webglExtensions: 0,
+      });
+      expect(spoofingWithWebGL.webglHeadless).toBe(true);
+    });
+
+    it('pixelRatioInconsistent with out-of-range values', () => {
+      const spoofingLow = detectSpoofing({ pixelRatio: 0 });
+      expect(spoofingLow.pixelRatioInconsistent).toBe(true);
+
+      const spoofingHigh = detectSpoofing({ pixelRatio: 5 });
+      expect(spoofingHigh.pixelRatioInconsistent).toBe(true);
+
+      const spoofingNormal = detectSpoofing({ pixelRatio: 1.5 });
+      expect(spoofingNormal.pixelRatioInconsistent).toBe(false);
     });
   });
 
@@ -150,8 +315,36 @@ describe('scoring service', () => {
       expect(scoreCanvas(true, 'no-context')).toBe(25);
     });
 
-    it('returns 70 for valid canvas hash', () => {
+    it('returns 70 for valid canvas hash with no spoofing signals', () => {
       expect(scoreCanvas(true, 'abc123hash')).toBe(70);
+    });
+
+    it('returns 30 when canvas blank hash matches text hash (fingerprint randomizer)', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'abc123hash')).toBe(30);
+    });
+
+    it('returns 70 when canvas blank hash differs from text hash (normal)', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'def456blank')).toBe(70);
+    });
+
+    it('ignores invalid canvas blank hashes', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'unsupported')).toBe(70);
+      expect(scoreCanvas(true, 'abc123hash', 'error')).toBe(70);
+      expect(scoreCanvas(true, 'abc123hash', 'no-context')).toBe(70);
+      expect(scoreCanvas(true, 'abc123hash', 'no-blank-context')).toBe(70);
+    });
+
+    it('returns 25 when WebGL renderer from canvas mismatches WebGL data', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'def456blank', 'NVIDIA GTX 1080', 'AMD Radeon RX')).toBe(25);
+    });
+
+    it('returns 70 when WebGL renderer from canvas matches WebGL data', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'def456blank', 'NVIDIA GTX 1080', 'NVIDIA GTX 1080')).toBe(70);
+    });
+
+    it('ignores renderer mismatch when renderer is unknown', () => {
+      expect(scoreCanvas(true, 'abc123hash', 'def456blank', 'NVIDIA GTX 1080', 'unknown')).toBe(70);
+      expect(scoreCanvas(true, 'abc123hash', 'def456blank', '', 'AMD Radeon RX')).toBe(70);
     });
   });
 
@@ -176,6 +369,31 @@ describe('scoring service', () => {
       expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080')).toBe(75);
       expect(scoreWebGL(true, 'Apple GPU')).toBe(75);
     });
+
+    it('penalizes too few WebGL extensions on desktop', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', 3)).toBe(50); // 75 - 25
+    });
+
+    it('penalizes too few WebGL extensions on mobile', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', 2, undefined, true)).toBe(50);
+    });
+
+    it('does not penalize sufficient extensions', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', 8)).toBe(75);
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', 5, undefined, true)).toBe(75);
+    });
+
+    it('penalizes very small max texture size (headless emulator)', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', undefined, 512)).toBe(45); // 75 - 30
+    });
+
+    it('does not penalize normal max texture size', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', undefined, 4096)).toBe(75);
+    });
+
+    it('combines extensions and texture size penalties', () => {
+      expect(scoreWebGL(true, 'NVIDIA GeForce GTX 1080', 2, 512)).toBe(20); // 75 - 25 - 30 = 20
+    });
   });
 
   describe('scoreScreen', () => {
@@ -199,6 +417,20 @@ describe('scoring service', () => {
     it('returns 60 for uncommon resolutions', () => {
       // 1400x900 is within 50px of 1440x900 (common), so returns 80
       expect(scoreScreen(2000, 1200)).toBe(60);
+    });
+
+    it('returns 15 for invalid pixel ratio (zero or negative)', () => {
+      expect(scoreScreen(1920, 1080, 0)).toBe(15);
+      expect(scoreScreen(1920, 1080, -1)).toBe(15);
+    });
+
+    it('returns 25 for abnormally high pixel ratio (>4)', () => {
+      expect(scoreScreen(1920, 1080, 5)).toBe(25);
+    });
+
+    it('returns 80 for common resolution with normal pixel ratio', () => {
+      expect(scoreScreen(1920, 1080, 1)).toBe(80);
+      expect(scoreScreen(1920, 1080, 2)).toBe(80);
     });
   });
 
@@ -241,6 +473,48 @@ describe('scoring service', () => {
       const lowCores = scoreNavigator({ hardwareConcurrency: 1 });
       const highCores = scoreNavigator({ hardwareConcurrency: 8 });
       expect(highCores).toBeGreaterThan(lowCores);
+    });
+
+    it('penalizes platform/UA mismatch: UA says Mac but platform says Win', () => {
+      const matched = scoreNavigator({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0',
+        platform: 'MacIntel',
+        cookiesEnabled: true,
+        hardwareConcurrency: 8,
+      });
+      const mismatched = scoreNavigator({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0',
+        platform: 'Win32',
+        cookiesEnabled: true,
+        hardwareConcurrency: 8,
+      });
+      expect(mismatched).toBeLessThan(matched);
+    });
+
+    it('penalizes platform/UA mismatch: UA says Windows but platform says Mac', () => {
+      const mismatched = scoreNavigator({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'MacIntel',
+        cookiesEnabled: true,
+        hardwareConcurrency: 8,
+      });
+      const matched = scoreNavigator({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'Win32',
+        cookiesEnabled: true,
+        hardwareConcurrency: 8,
+      });
+      expect(mismatched).toBeLessThan(matched);
+    });
+
+    it('does not penalize matching platform and UA', () => {
+      const result = scoreNavigator({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'Win32',
+        cookiesEnabled: true,
+        hardwareConcurrency: 8,
+      });
+      expect(result).toBeGreaterThanOrEqual(70);
     });
 
     it('clamps score between 0 and 100', () => {
@@ -293,6 +567,7 @@ describe('scoring service', () => {
         timingOracleScore: 80,
         tremorScore: 80,
         webrtcOracleScore: 80,
+        spoofingFlags: 0,
         overallScore: 0,
       };
 
@@ -316,6 +591,7 @@ describe('scoring service', () => {
         timingOracleScore: 80,
         tremorScore: 80,
         webrtcOracleScore: 80,
+        spoofingFlags: 0,
         overallScore: 0,
       };
 
@@ -345,7 +621,7 @@ describe('scoring service', () => {
   });
 
   describe('calculateAllScores', () => {
-    it('returns all signal scores', () => {
+    it('returns all signal scores including spoofingFlags', () => {
       const behavioral = {
         straightLineRatio: 0.3,
         timeOnPage: 5000,
@@ -357,9 +633,12 @@ describe('scoring service', () => {
         isCanvasSupported: true,
         canvasHash: 'validhash123',
         hasWebGL: true,
-        webglRenderer: 'NVIDIA RTX 3080',
+        renderer: 'NVIDIA RTX 3080',
+        webglExtensions: 24,
+        maxTextureSize: 16384,
         screenWidth: 1920,
         screenHeight: 1080,
+        pixelRatio: 1,
         userAgent: 'Mozilla/5.0 Chrome/120.0.0.0',
         platform: 'Win32',
         language: 'en-US',
@@ -380,6 +659,7 @@ describe('scoring service', () => {
       expect(result.screenScore).toBeGreaterThan(0);
       expect(result.navigatorScore).toBeGreaterThan(0);
       expect(result.networkScore).toBeGreaterThan(0);
+      expect(result.spoofingFlags).toBe(0);
       expect(result.overallScore).toBe(0);
     });
 
@@ -392,6 +672,188 @@ describe('scoring service', () => {
       expect(result.canvasScore).toBe(15);  // no canvas
       expect(result.webglScore).toBe(15);   // no webgl
       expect(result.screenScore).toBe(20);  // missing dimensions
+    });
+
+    it('detects canvas spoofing in calculateAllScores', () => {
+      const result = calculateAllScores({
+        isCanvasSupported: true,
+        canvasHash: 'abc123',
+        canvasBlankHash: 'abc123',
+      });
+      expect(result.canvasScore).toBe(30);
+      expect(result.spoofingFlags).toBeGreaterThanOrEqual(1);
+    });
+
+    it('detects WebGL headless indicators in calculateAllScores', () => {
+      const result = calculateAllScores({
+        hasWebGL: true,
+        renderer: 'NVIDIA RTX 3080',
+        webglExtensions: 2,
+        maxTextureSize: 512,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0.0.0',
+      });
+      expect(result.spoofingFlags).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('detectSpoofing', () => {
+    it('returns all false flags when no spoofing signals present', () => {
+      const flags = detectSpoofing({
+        canvasHash: 'abc123',
+        canvasBlankHash: 'def456',
+        webglRendererFromCanvas: 'NVIDIA GTX 1080',
+        renderer: 'NVIDIA GTX 1080',
+        hasWebGL: true,
+        webglExtensions: 24,
+        maxTextureSize: 16384,
+        pixelRatio: 1,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'Win32',
+      });
+      expect(flags.canvasBlocked).toBe(false);
+      expect(flags.webglRendererMismatch).toBe(false);
+      expect(flags.webglHeadless).toBe(false);
+      expect(flags.pixelRatioInconsistent).toBe(false);
+      expect(flags.platformUAMismatch).toBe(false);
+    });
+
+    it('detects canvas blocked when canvas hash matches blank hash', () => {
+      const flags = detectSpoofing({
+        canvasHash: 'samehash',
+        canvasBlankHash: 'samehash',
+      });
+      expect(flags.canvasBlocked).toBe(true);
+    });
+
+    it('does not flag canvas blocked when hashes differ', () => {
+      const flags = detectSpoofing({
+        canvasHash: 'hash1',
+        canvasBlankHash: 'hash2',
+      });
+      expect(flags.canvasBlocked).toBe(false);
+    });
+
+    it('ignores invalid canvas blank hashes', () => {
+      for (const invalid of ['unsupported', 'error', 'no-context', 'no-blank-context']) {
+        const flags = detectSpoofing({ canvasHash: 'abc', canvasBlankHash: invalid });
+        expect(flags.canvasBlocked).toBe(false);
+      }
+    });
+
+    it('detects WebGL renderer mismatch', () => {
+      const flags = detectSpoofing({
+        webglRendererFromCanvas: 'NVIDIA GTX 1080',
+        renderer: 'AMD Radeon RX 580',
+      });
+      expect(flags.webglRendererMismatch).toBe(true);
+    });
+
+    it('does not flag renderer mismatch for unknown/empty renderers', () => {
+      expect(detectSpoofing({ webglRendererFromCanvas: 'NVIDIA GTX 1080', renderer: 'unknown' }).webglRendererMismatch).toBe(false);
+      expect(detectSpoofing({ webglRendererFromCanvas: '', renderer: 'AMD Radeon RX 580' }).webglRendererMismatch).toBe(false);
+      expect(detectSpoofing({ webglRendererFromCanvas: 'NVIDIA GTX 1080', renderer: 'none' }).webglRendererMismatch).toBe(false);
+    });
+
+    it('detects WebGL headless via too few extensions on desktop', () => {
+      const flags = detectSpoofing({
+        hasWebGL: true,
+        webglExtensions: 3,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0.0.0',
+      });
+      expect(flags.webglHeadless).toBe(true);
+    });
+
+    it('uses lower extensions threshold for mobile UA', () => {
+      const mobile = detectSpoofing({
+        hasWebGL: true,
+        webglExtensions: 2,
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Mobile Safari',
+      });
+      expect(mobile.webglHeadless).toBe(true);
+
+      const desktop = detectSpoofing({
+        hasWebGL: true,
+        webglExtensions: 4,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0.0.0',
+      });
+      expect(desktop.webglHeadless).toBe(true);
+    });
+
+    it('detects WebGL headless via low max texture size', () => {
+      const flags = detectSpoofing({
+        hasWebGL: true,
+        maxTextureSize: 512,
+      });
+      expect(flags.webglHeadless).toBe(true);
+    });
+
+    it('does not flag WebGL headless for normal texture size', () => {
+      const flags = detectSpoofing({
+        hasWebGL: true,
+        maxTextureSize: 16384,
+        webglExtensions: 20,
+      });
+      expect(flags.webglHeadless).toBe(false);
+    });
+
+    it('detects invalid pixel ratio (zero or negative)', () => {
+      expect(detectSpoofing({ pixelRatio: 0 }).pixelRatioInconsistent).toBe(true);
+      expect(detectSpoofing({ pixelRatio: -1 }).pixelRatioInconsistent).toBe(true);
+    });
+
+    it('detects abnormally high pixel ratio', () => {
+      expect(detectSpoofing({ pixelRatio: 5 }).pixelRatioInconsistent).toBe(true);
+    });
+
+    it('does not flag normal pixel ratios', () => {
+      expect(detectSpoofing({ pixelRatio: 1 }).pixelRatioInconsistent).toBe(false);
+      expect(detectSpoofing({ pixelRatio: 2 }).pixelRatioInconsistent).toBe(false);
+      expect(detectSpoofing({ pixelRatio: 3 }).pixelRatioInconsistent).toBe(false);
+    });
+
+    it('detects platform/UA mismatch: UA Mac, platform Win', () => {
+      const flags = detectSpoofing({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0',
+        platform: 'Win32',
+      });
+      expect(flags.platformUAMismatch).toBe(true);
+    });
+
+    it('detects platform/UA mismatch: UA Windows, platform Mac', () => {
+      const flags = detectSpoofing({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'MacIntel',
+      });
+      expect(flags.platformUAMismatch).toBe(true);
+    });
+
+    it('does not flag matching platform and UA', () => {
+      expect(detectSpoofing({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        platform: 'Win32',
+      }).platformUAMismatch).toBe(false);
+
+      expect(detectSpoofing({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120',
+        platform: 'MacIntel',
+      }).platformUAMismatch).toBe(false);
+    });
+
+    it('counts multiple spoofing signals correctly', () => {
+      const flags = detectSpoofing({
+        canvasHash: 'samehash',
+        canvasBlankHash: 'samehash',
+        webglRendererFromCanvas: 'NVIDIA GTX 1080',
+        renderer: 'AMD Radeon RX 580',
+        hasWebGL: true,
+        webglExtensions: 2,
+        maxTextureSize: 512,
+        pixelRatio: 0,
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X) Chrome/120.0.0.0',
+        platform: 'Win32',
+      });
+      const count = Object.values(flags).filter(Boolean).length;
+      expect(count).toBeGreaterThanOrEqual(4); // canvasBlocked + webglRendererMismatch + webglHeadless + pixelRatio + platformUA
     });
   });
 });

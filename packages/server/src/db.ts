@@ -10,6 +10,9 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 
 export const db = new Database(config.dbPath);
 
+db.pragma('journal_mode = WAL');
+db.pragma('busy_timeout = 5000');
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS challenges (
     id TEXT PRIMARY KEY,
@@ -113,6 +116,22 @@ db.exec(`
 `);
 
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('pow_difficulty', '4')").run();
+
+function safeAddColumn(table: string, column: string, type: string, defaultValue: string): void {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type} NOT NULL DEFAULT ${defaultValue}`);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('duplicate column name')) {
+      return;
+    }
+    throw err;
+  }
+}
+
+safeAddColumn('federation_peers', 'consecutive_failures', 'INTEGER', '0');
+safeAddColumn('federation_peers', 'last_failure_at', 'INTEGER', '0');
+safeAddColumn('federation_peers', 'last_failure_reason', 'TEXT', "''");
+safeAddColumn('federation_peers', 'last_success_at', 'INTEGER', '0');
 
 export interface DbChallenge {
   id: string;

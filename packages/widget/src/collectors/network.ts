@@ -48,7 +48,9 @@ export async function measureLatency(apiUrl: string): Promise<number> {
     const start = performance.now();
     await fetch(`${apiUrl}/health`, { method: 'GET', mode: 'no-cors' });
     const end = performance.now();
-    return Math.round(end - start);
+    const rawLatency = end - start;
+    const jitteredLatency = rawLatency * (1 + (Math.random() * 0.3 - 0.15));
+    return Math.round(Math.max(0, jitteredLatency));
   } catch {
     return 0;
   }

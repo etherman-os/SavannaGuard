@@ -3,6 +3,7 @@ export interface ChallengeResponse {
   nonce: string;
   difficulty: number;
   sessionId: string;
+  obfKey: string;
 }
 
 export interface SolveResponse {
@@ -23,9 +24,14 @@ export interface BehavioralData {
   totalKeystrokes?: number;
   canvasHash?: string;
   isCanvasSupported?: boolean;
+  canvasBlankHash?: string;
+  webglRendererFromCanvas?: string;
   webglRenderer?: string;
   webglVendor?: string;
   hasWebGL?: boolean;
+  webglExtensions?: number;
+  maxTextureSize?: number;
+  maxRenderbufferSize?: number;
   screenWidth?: number;
   screenHeight?: number;
   colorDepth?: number;

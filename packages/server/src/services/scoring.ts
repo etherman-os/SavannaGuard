@@ -12,7 +12,88 @@ export interface SignalScores {
   timingOracleScore: number;
   tremorScore: number;
   webrtcOracleScore: number;
+  spoofingFlags: number;
   overallScore: number;
+}
+
+export interface SpoofingFlags {
+  canvasBlocked: boolean;
+  webglRendererMismatch: boolean;
+  webglHeadless: boolean;
+  pixelRatioInconsistent: boolean;
+  platformUAMismatch: boolean;
+}
+
+export function detectSpoofing(data: {
+  canvasHash?: string;
+  canvasBlankHash?: string;
+  webglRendererFromCanvas?: string;
+  renderer?: string;
+  hasWebGL?: boolean;
+  webglExtensions?: number;
+  maxTextureSize?: number;
+  screenHeight?: number;
+  pixelRatio?: number;
+  userAgent?: string;
+  platform?: string;
+}): SpoofingFlags {
+  const flags: SpoofingFlags = {
+    canvasBlocked: false,
+    webglRendererMismatch: false,
+    webglHeadless: false,
+    pixelRatioInconsistent: false,
+    platformUAMismatch: false,
+  };
+
+  const invalidCanvasValues = new Set(['unsupported', 'error', 'no-context']);
+  const invalidBlankValues = new Set(['unsupported', 'error', 'no-context', 'no-blank-context']);
+
+  if (data.canvasHash && data.canvasBlankHash &&
+      !invalidCanvasValues.has(data.canvasHash) &&
+      !invalidBlankValues.has(data.canvasBlankHash)) {
+    if (data.canvasHash === data.canvasBlankHash) {
+      flags.canvasBlocked = true;
+    }
+  }
+
+  const invalidRendererValues = new Set(['', 'unknown', 'none', 'no-context', 'error']);
+  if (data.webglRendererFromCanvas && data.renderer &&
+      !invalidRendererValues.has(data.webglRendererFromCanvas) &&
+      !invalidRendererValues.has(data.renderer)) {
+    if (data.webglRendererFromCanvas !== data.renderer) {
+      flags.webglRendererMismatch = true;
+    }
+  }
+
+  if (data.hasWebGL) {
+    const isMobile = /mobile|android|iphone|ipad/i.test(data.userAgent ?? '');
+    const minExtensions = isMobile ? 3 : 5;
+    if (typeof data.webglExtensions === 'number' && data.webglExtensions >= 0 && data.webglExtensions < minExtensions) {
+      flags.webglHeadless = true;
+    }
+    if (typeof data.maxTextureSize === 'number' && data.maxTextureSize > 0 && data.maxTextureSize < 1024) {
+      flags.webglHeadless = true;
+    }
+  }
+
+  if (typeof data.pixelRatio === 'number') {
+    if (data.pixelRatio <= 0) flags.pixelRatioInconsistent = true;
+    if (data.pixelRatio > 4) flags.pixelRatioInconsistent = true;
+  }
+
+  if (data.userAgent && data.platform) {
+    const u = data.userAgent.toLowerCase();
+    const p = data.platform;
+    const uaHasMac = u.includes('mac') && !u.includes('mobile');
+    const uaHasWin = u.includes('win');
+    const platHasMac = p.includes('Mac');
+    const platHasWin = p.includes('Win');
+
+    if (uaHasMac && platHasWin) flags.platformUAMismatch = true;
+    if (uaHasWin && platHasMac) flags.platformUAMismatch = true;
+  }
+
+  return flags;
 }
 
 const DEFAULT_WEIGHTS = {
@@ -109,25 +190,83 @@ export function scoreKeystroke(data: {
   return Math.max(0, Math.min(100, score));
 }
 
-export function scoreCanvas(isCanvasSupported: boolean | undefined, canvasHash: string | undefined): number {
+export function scoreCanvas(
+  isCanvasSupported: boolean | undefined,
+  canvasHash: string | undefined,
+  canvasBlankHash?: string | undefined,
+  webglRendererFromCanvas?: string | undefined,
+  renderer?: string | undefined
+): number {
   if (!isCanvasSupported) return 15;
   if (!canvasHash || canvasHash === 'unsupported' || canvasHash === 'error' || canvasHash === 'no-context') return 25;
-  return 70;
+
+  let score = 70;
+
+  const invalidBlankValues = new Set(['unsupported', 'error', 'no-context', 'no-blank-context']);
+  if (canvasBlankHash && !invalidBlankValues.has(canvasBlankHash)) {
+    if (canvasHash === canvasBlankHash) {
+      score = 30;
+    }
+  }
+
+  const invalidRendererValues = new Set(['', 'unknown', 'none', 'no-context', 'error']);
+  if (webglRendererFromCanvas && renderer &&
+      !invalidRendererValues.has(webglRendererFromCanvas) &&
+      !invalidRendererValues.has(renderer)) {
+    if (webglRendererFromCanvas !== renderer) {
+      score = Math.min(score, 25);
+    }
+  }
+
+  return Math.max(0, Math.min(100, score));
 }
 
-export function scoreWebGL(hasWebGL: boolean | undefined, renderer: string | undefined): number {
+export function scoreWebGL(
+  hasWebGL: boolean | undefined,
+  renderer: string | undefined,
+  webglExtensions?: number | undefined,
+  maxTextureSize?: number | undefined,
+  maxRenderbufferSize?: number | undefined,
+  isMobileUA?: boolean | undefined
+): number {
   if (!hasWebGL) return 15;
   if (!renderer || renderer === 'none' || renderer === 'no-context' || renderer === 'error') return 25;
 
   const lower = renderer.toLowerCase();
   if (lower.includes('swiftshader') || lower.includes('llvmpipe')) return 30;
 
-  return 75;
+  let score = 75;
+
+  if (typeof webglExtensions === 'number' && webglExtensions >= 0) {
+    const minExtensions = isMobileUA ? 3 : 5;
+    if (webglExtensions < minExtensions) {
+      score -= 25;
+    }
+  }
+
+  if (typeof maxTextureSize === 'number' && maxTextureSize > 0 && maxTextureSize < 1024) {
+    score -= 30;
+  }
+
+  if (typeof maxRenderbufferSize === 'number' && maxRenderbufferSize > 0 && maxRenderbufferSize < 1024) {
+    score -= 30;
+  }
+
+  return Math.max(0, Math.min(100, score));
 }
 
-export function scoreScreen(screenWidth: number | undefined, screenHeight: number | undefined): number {
+export function scoreScreen(
+  screenWidth: number | undefined,
+  screenHeight: number | undefined,
+  pixelRatio?: number | undefined
+): number {
   if (!screenWidth || !screenHeight || screenWidth === 0 || screenHeight === 0) return 20;
   if (screenWidth < 320 || screenHeight < 240) return 25;
+
+  if (typeof pixelRatio === 'number') {
+    if (pixelRatio <= 0) return 15;
+    if (pixelRatio > 4) return 25;
+  }
 
   const commonResolutions = [
     [1920, 1080], [1366, 768], [1536, 864], [1440, 900],
@@ -175,6 +314,18 @@ export function scoreNavigator(data: {
   const commonBrowsers = ['chrome', 'firefox', 'safari', 'edge', 'opera', 'brave'];
   const isCommonBrowser = commonBrowsers.some(b => ua.toLowerCase().includes(b));
   if (isCommonBrowser) score += 10;
+
+  if (data.platform && ua && ua.length >= 20) {
+    const u = ua.toLowerCase();
+    const p = data.platform;
+    const uaHasMac = u.includes('mac') && !u.includes('mobile');
+    const uaHasWin = u.includes('win');
+    const platHasMac = p.includes('Mac');
+    const platHasWin = p.includes('Win');
+
+    if (uaHasMac && platHasWin) score -= 20;
+    if (uaHasWin && platHasMac) score -= 20;
+  }
 
   return Math.max(0, Math.min(100, score));
 }
@@ -320,15 +471,24 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
   });
   const canvasScore = scoreCanvas(
     behavioral.isCanvasSupported as boolean | undefined,
-    behavioral.canvasHash as string | undefined
+    behavioral.canvasHash as string | undefined,
+    behavioral.canvasBlankHash as string | undefined,
+    behavioral.webglRendererFromCanvas as string | undefined,
+    behavioral.renderer as string | undefined
   );
+  const isMobileUA = /mobile|android|iphone|ipad/i.test((behavioral.userAgent as string) ?? '');
   const webglScore = scoreWebGL(
     behavioral.hasWebGL as boolean | undefined,
-    behavioral.renderer as string | undefined
+    behavioral.renderer as string | undefined,
+    behavioral.webglExtensions as number | undefined,
+    behavioral.maxTextureSize as number | undefined,
+    behavioral.maxRenderbufferSize as number | undefined,
+    isMobileUA
   );
   const screenScore = scoreScreen(
     behavioral.screenWidth as number | undefined,
-    behavioral.screenHeight as number | undefined
+    behavioral.screenHeight as number | undefined,
+    behavioral.pixelRatio as number | undefined
   );
   const navigatorScore = scoreNavigator({
     userAgent: behavioral.userAgent as string | undefined,
@@ -352,6 +512,21 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
     behavioral.webrtcOracle as WebRTCOracleData | undefined
   );
 
+  const spoofing = detectSpoofing({
+    canvasHash: behavioral.canvasHash as string | undefined,
+    canvasBlankHash: behavioral.canvasBlankHash as string | undefined,
+    webglRendererFromCanvas: behavioral.webglRendererFromCanvas as string | undefined,
+    renderer: behavioral.renderer as string | undefined,
+    hasWebGL: behavioral.hasWebGL as boolean | undefined,
+    webglExtensions: behavioral.webglExtensions as number | undefined,
+    maxTextureSize: behavioral.maxTextureSize as number | undefined,
+    screenHeight: behavioral.screenHeight as number | undefined,
+    pixelRatio: behavioral.pixelRatio as number | undefined,
+    userAgent: behavioral.userAgent as string | undefined,
+    platform: behavioral.platform as string | undefined,
+  });
+  const spoofingFlagCount = Object.values(spoofing).filter(Boolean).length;
+
   return {
     mouseScore,
     keyboardScore,
@@ -364,6 +539,7 @@ export function calculateAllScores(behavioral: Record<string, unknown>): SignalS
     timingOracleScore,
     tremorScore,
     webrtcOracleScore,
+    spoofingFlags: spoofingFlagCount,
     overallScore: 0,
   };
 }

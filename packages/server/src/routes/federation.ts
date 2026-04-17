@@ -26,8 +26,12 @@ import {
   recordFederatedSignature,
 } from '../services/federation.js';
 import { config } from '../config.js';
+import { logger } from '../services/logger.js';
 
 const ADMIN_COOKIE_NAME = 'savanna_admin';
+const MAX_PAYLOAD_BYTES = Number.isFinite(config.federation.maxPayloadBytes) && config.federation.maxPayloadBytes > 0
+  ? config.federation.maxPayloadBytes
+  : 5 * 1024 * 1024;
 
 function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -55,35 +59,35 @@ function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
   return false;
 }
 
+function requireAdminCsrf(request: FastifyRequest, reply: FastifyReply): boolean {
+  if (!requireAdmin(request, reply)) return false;
+  const header = request.headers['x-requested-with'] ?? '';
+  if (typeof header !== 'string' || header !== 'SavannaAdmin') {
+    reply.status(403).send({ error: 'Forbidden' });
+    return false;
+  }
+  return true;
+}
+
 export function federationRoutes(app: FastifyInstance) {
   function resolveAuthenticatedPeer(payload: string, signature: string) {
     const peers = listPeers();
     let matchedPeer: ReturnType<typeof listPeers>[0] | null = null;
 
-    // Check all peers in constant time pattern to prevent timing attack
     for (const peer of peers) {
-      // Use constant-time comparison for HMAC check
       const expected = crypto.createHmac('sha256', peer.psk).update(payload).digest('hex');
-      let isValid = true;
-      if (expected.length !== signature.length) {
-        isValid = false;
-      } else {
-        try {
-          const expectedBuf = Buffer.from(expected);
-          const sigBuf = Buffer.from(signature);
-          // Check all bytes to ensure constant time - use XOR to detect any difference
-          for (let i = 0; i < expectedBuf.length; i++) {
-            if (expectedBuf[i] !== sigBuf[i]) {
-              isValid = false;
-              break;
-            }
-          }
-        } catch {
-          isValid = false;
+      if (expected.length !== signature.length) continue;
+      try {
+        const isValid = crypto.timingSafeEqual(
+          Buffer.from(expected, 'utf-8'),
+          Buffer.from(signature, 'utf-8'),
+        );
+        if (isValid) {
+          matchedPeer = peer;
+          break;
         }
-      }
-      if (isValid) {
-        matchedPeer = peer;
+      } catch {
+        // timingSafeEqual throws if buffers are different lengths (already checked above)
       }
     }
 
@@ -105,8 +109,11 @@ export function federationRoutes(app: FastifyInstance) {
     const payload = JSON.stringify(body);
     const peer = resolveAuthenticatedPeer(payload, hmac);
     if (!peer) {
+      logger.warn('federation:auth', 'HMAC authentication failed on /state endpoint');
       return rep.status(401).send({ error: 'Invalid HMAC signature' });
     }
+
+    logger.debug('federation:state', 'Serving state request', { peerUrl: peer.peerUrl });
 
     const signatures = getTopFederatedSignatures(1000);
     const stateHash = crypto
@@ -129,7 +136,9 @@ export function federationRoutes(app: FastifyInstance) {
    * POST /federation/sync
    * Receive pushed signatures from another peer
    */
-  app.post('/federation/sync', async (req, rep) => {
+  app.post('/federation/sync', {
+    bodyLimit: MAX_PAYLOAD_BYTES,
+  }, async (req, rep) => {
     const hmac = req.headers['x-savannaguard-hmac'] as string | undefined;
     if (!hmac) {
       return rep.status(401).send({ error: 'Missing HMAC signature' });
@@ -156,21 +165,32 @@ export function federationRoutes(app: FastifyInstance) {
     const peer = resolveAuthenticatedPeer(payload, hmac);
 
     if (!peer) {
+      logger.warn('federation:auth', 'HMAC authentication failed on /sync endpoint');
       return rep.status(401).send({ error: 'Invalid HMAC signature' });
     }
 
     // Record all signatures with validation
+    let merged = 0;
+    let skipped = 0;
     for (const sig of body.signatures) {
-      // Validate inputs
-      const hash = String(sig.hash ?? '').slice(0, 128); // max 128 chars, prevent DoS
+      const hash = String(sig.hash ?? '').slice(0, 128);
       const hashType = ['ip', 'ua', 'combined'].includes(sig.hashType) ? sig.hashType : 'ip';
-      const attackType = String(sig.attackType ?? 'unknown').slice(0, 50); // max 50 chars
-      const confidence = Math.max(0, Math.min(1, Number(sig.confidence ?? 0))); // clamp 0-1
+      const attackType = String(sig.attackType ?? 'unknown').slice(0, 50);
+      const confidence = Math.max(0, Math.min(1, Number(sig.confidence ?? 0)));
 
-      recordFederatedSignature(hash, hashType, attackType, confidence, peer.peerId);
+      const result = recordFederatedSignature(hash, hashType, attackType, confidence, peer.peerId);
+      if (result.merged) merged++;
+      if (result.skipped) skipped++;
     }
 
-    return { received: body.signatures.length, status: 'ok' };
+    logger.info('federation:sync', 'Received pushed signatures', {
+      peerUrl: peer.peerUrl,
+      received: String(body.signatures.length),
+      merged: String(merged),
+      skipped: String(skipped),
+    });
+
+    return { received: body.signatures.length, merged, skipped, status: 'ok' };
   });
 
   /**
@@ -224,15 +244,20 @@ export function federationRoutes(app: FastifyInstance) {
    * Add a new peer
    */
   app.post('/admin/api/federation/peers', async (req, rep) => {
-    if (!requireAdmin(req, rep)) return;
+    if (!requireAdminCsrf(req, rep)) return;
 
     const body = req.body as { peerUrl?: string; psk?: string };
     if (!body.peerUrl || !body.psk) {
       return rep.status(400).send({ error: 'peerUrl and psk required' });
     }
 
-    const peer = addPeer(body.peerUrl, body.psk);
-    return { peer: toPublicPeer(peer), status: 'added' };
+    try {
+      const peer = addPeer(body.peerUrl, body.psk);
+      logger.info('federation:peer', 'New peer added via admin', { peerUrl: body.peerUrl });
+      return { peer: toPublicPeer(peer), status: 'added' };
+    } catch (err) {
+      return rep.status(400).send({ error: (err as Error).message });
+    }
   });
 
   /**
@@ -240,7 +265,7 @@ export function federationRoutes(app: FastifyInstance) {
    * Remove a peer
    */
   app.delete('/admin/api/federation/peers/:peerId', async (req, rep) => {
-    if (!requireAdmin(req, rep)) return;
+    if (!requireAdminCsrf(req, rep)) return;
 
     const { peerId } = req.params as { peerId: string };
     removePeer(peerId);
@@ -252,7 +277,7 @@ export function federationRoutes(app: FastifyInstance) {
    * Trigger manual sync with a specific peer or all peers
    */
   app.post('/admin/api/federation/sync', async (req, rep) => {
-    if (!requireAdmin(req, rep)) return;
+    if (!requireAdminCsrf(req, rep)) return;
 
     const body = (req.body ?? {}) as { peerUrl?: string };
     if (!body.peerUrl || body.peerUrl.trim().length === 0) {

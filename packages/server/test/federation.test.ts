@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/index.js';
 import { db } from '../src/db.js';
+import { logger } from '../src/services/logger.js';
 
 interface AddedPeerResponse {
   peer: {
@@ -11,7 +12,10 @@ interface AddedPeerResponse {
     lastSeen: number;
     trusted: boolean;
     status: string;
-    psk?: string;
+    consecutiveFailures: number;
+    lastFailureAt: number;
+    lastFailureReason: string;
+    lastSuccessAt: number;
   };
   status: string;
 }
@@ -25,6 +29,7 @@ interface SyncAllResponse {
     peerUrl: string;
     received: number;
     merged: number;
+    skipped: number;
     errors: string[];
   }>;
 }
@@ -40,16 +45,17 @@ describe('federation routes', () => {
   const originalFetch = globalThis.fetch;
 
   beforeAll(async () => {
+    logger.setLevel('error');
+  });
+
+  beforeEach(async () => {
     app = buildServer();
     await app.ready();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
     await app.close();
-  });
-
-  beforeEach(() => {
     db.exec('DELETE FROM federation_sync_state;');
     db.exec('DELETE FROM federated_signature_reports;');
     db.exec('DELETE FROM federated_signatures;');
@@ -64,7 +70,7 @@ describe('federation routes', () => {
         cookie: adminCookieHeader(),
       },
       payload: {
-        peerUrl: 'http://127.0.0.1:18081',
+        peerUrl: 'https://fed-peer-a.example.com:18081',
         psk: 'top-secret-psk',
       },
     });
@@ -72,7 +78,7 @@ describe('federation routes', () => {
     expect(createResponse.statusCode).toBe(200);
     const created = createResponse.json() as AddedPeerResponse;
     expect(created.status).toBe('added');
-    expect(created.peer.peerUrl).toBe('http://127.0.0.1:18081');
+    expect(created.peer.peerUrl).toBe('https://fed-peer-a.example.com:18081');
     expect(created.peer.psk).toBeUndefined();
 
     const listResponse = await app.inject({
@@ -86,14 +92,33 @@ describe('federation routes', () => {
     expect(listResponse.statusCode).toBe(200);
     const peers = listResponse.json() as Array<Record<string, unknown>>;
     expect(peers.length).toBe(1);
-    expect(peers[0].peerUrl).toBe('http://127.0.0.1:18081');
+    expect(peers[0].peerUrl).toBe('https://fed-peer-a.example.com:18081');
     expect(peers[0].psk).toBeUndefined();
+  });
+
+  it('includes peer health fields in admin responses', async () => {
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/peers',
+      headers: {
+        cookie: adminCookieHeader(),
+      },
+      payload: {
+        peerUrl: 'https://fed-peer-a.example.com:18081',
+        psk: 'test-psk',
+      },
+    });
+
+    expect(createResponse.statusCode).toBe(200);
+    const created = createResponse.json() as AddedPeerResponse;
+    expect(created.peer.consecutiveFailures).toBe(0);
+    expect(created.peer.lastFailureReason).toBe('');
+    expect(typeof created.peer.lastSuccessAt).toBe('number');
   });
 
   it('triggers sync for all peers when peerUrl is empty', async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
-      // pullSignaturesFromPeer calls /federation/state
       if (url.endsWith('/federation/state')) {
         return new Response(JSON.stringify({
           signatures: [],
@@ -104,7 +129,6 @@ describe('federation routes', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      // pushSignaturesToPeer calls /federation/sync
       if (url.endsWith('/federation/sync')) {
         return new Response(JSON.stringify({ received: 0, status: 'ok' }), {
           status: 200,
@@ -126,7 +150,7 @@ describe('federation routes', () => {
         cookie: adminCookieHeader(),
       },
       payload: {
-        peerUrl: 'http://127.0.0.1:18081',
+        peerUrl: 'https://fed-peer-a.example.com:18081',
         psk: 'peer-a-psk',
       },
     });
@@ -138,7 +162,7 @@ describe('federation routes', () => {
         cookie: adminCookieHeader(),
       },
       payload: {
-        peerUrl: 'http://127.0.0.1:18082',
+        peerUrl: 'https://fed-peer-b.example.com:18082',
         psk: 'peer-b-psk',
       },
     });
@@ -148,6 +172,7 @@ describe('federation routes', () => {
       url: '/admin/api/federation/sync',
       headers: {
         cookie: adminCookieHeader(),
+        'x-requested-with': 'SavannaAdmin',
       },
       payload: {
         peerUrl: '',
@@ -180,7 +205,7 @@ describe('federation routes', () => {
         cookie: adminCookieHeader(),
       },
       payload: {
-        peerUrl: 'http://127.0.0.1:19000',
+        peerUrl: 'https://fed-peer-single.example.com:19000',
         psk: 'single-peer-psk',
       },
     });
@@ -217,6 +242,8 @@ describe('federation routes', () => {
       payload: body,
     });
     expect(first.statusCode).toBe(200);
+    expect((first.json() as Record<string, unknown>).merged).toBe(1);
+    expect((first.json() as Record<string, unknown>).skipped).toBe(0);
 
     const second = await app.inject({
       method: 'POST',
@@ -242,6 +269,62 @@ describe('federation routes', () => {
     expect(reports.c).toBe(1);
   });
 
+  it('skips merge when remote confidence is not higher and peer already reported', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/peers',
+      headers: {
+        cookie: adminCookieHeader(),
+      },
+      payload: {
+        peerUrl: 'https://fed-peer-skip.example.com:19001',
+        psk: 'skip-psk',
+      },
+    });
+
+    const body = {
+      type: 'push',
+      signatures: [
+        {
+          hash: 'skip-hash-1',
+          hashType: 'ip',
+          confidence: 0.9,
+          attackType: 'scraping',
+          firstSeen: Date.now() - 5000,
+          lastSeen: Date.now(),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const hmac = crypto
+      .createHmac('sha256', 'skip-psk')
+      .update(JSON.stringify(body))
+      .digest('hex');
+
+    await app.inject({
+      method: 'POST',
+      url: '/federation/sync',
+      headers: {
+        'x-savannaguard-hmac': hmac,
+      },
+      payload: body,
+    });
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: '/federation/sync',
+      headers: {
+        'x-savannaguard-hmac': hmac,
+      },
+      payload: body,
+    });
+
+    expect(secondResponse.statusCode).toBe(200);
+    const resultBody = secondResponse.json() as Record<string, unknown>;
+    expect(resultBody.skipped).toBe(1);
+  });
+
   it('returns federation state hash over GET /federation/state', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -253,5 +336,66 @@ describe('federation routes', () => {
     expect(typeof body.stateHash).toBe('string');
     expect(body.stateHash.length).toBe(64);
     expect(typeof body.signatureCount).toBe('number');
+  });
+
+  it('rejects oversized payloads with 413', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/peers',
+      headers: {
+        cookie: adminCookieHeader(),
+      },
+      payload: {
+        peerUrl: 'https://fed-peer-payload.example.com:19002',
+        psk: 'payload-psk',
+      },
+    });
+
+    const hugeSignatures = Array.from({ length: 50000 }, (_, i) => ({
+      hash: `hash-${i}-${'x'.repeat(100)}`,
+      hashType: 'ip',
+      confidence: 0.9,
+      attackType: 'scraping',
+      firstSeen: Date.now() - 1000,
+      lastSeen: Date.now(),
+    }));
+
+    const body = {
+      type: 'push',
+      signatures: hugeSignatures,
+      timestamp: Date.now(),
+    };
+
+    const hmac = crypto
+      .createHmac('sha256', 'payload-psk')
+      .update(JSON.stringify(body))
+      .digest('hex');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/federation/sync',
+      headers: {
+        'x-savannaguard-hmac': hmac,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(413);
+  });
+
+  it('includes offlinePeerCount in federation stats', async () => {
+    const statsResponse = await app.inject({
+      method: 'GET',
+      url: '/admin/api/federation/stats',
+      headers: {
+        cookie: adminCookieHeader(),
+      },
+    });
+
+    expect(statsResponse.statusCode).toBe(200);
+    const stats = statsResponse.json() as Record<string, unknown>;
+    expect(stats).toHaveProperty('offlinePeerCount');
+    expect(stats).toHaveProperty('activePeerCount');
+    expect(stats).toHaveProperty('peerCount');
   });
 });

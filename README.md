@@ -39,15 +39,80 @@ Mouse dynamics, keystroke cadence, canvas fingerprint, WebGL rendering, screen m
 - **Website:** https://savannaguard.com
 - **Repository:** https://github.com/etherman-os/SavannaGuard
 
-## Quick Start (3 commands)
+## ⚡ 1-Minute Setup
+
+### Docker (Recommended)
 
 ```bash
 git clone https://github.com/etherman-os/SavannaGuard && cd SavannaGuard
 cp .env.example .env
+# Edit .env — at minimum, change SECRET_KEY and ADMIN_PASSWORD
+nano .env
 docker compose up -d
 ```
 
-Then open http://localhost:3000/admin (default password: `admin`).
+Open http://localhost:3000/admin and log in with your `ADMIN_PASSWORD`.
+
+### One-Liner Setup
+
+Generates a random `SECRET_KEY` and starts immediately:
+
+```bash
+git clone https://github.com/etherman-os/SavannaGuard && cd SavannaGuard && \
+  cp .env.example .env && \
+  sed -i "s/SECRET_KEY=change-me-to-a-random-string/SECRET_KEY=$(openssl rand -hex 32)/" .env && \
+  sed -i "s/ADMIN_PASSWORD=admin/ADMIN_PASSWORD=change-me-before-deploying/" .env && \
+  docker compose up -d
+```
+
+> ⚠️ Replace `change-me-before-deploying` with a strong password in the command above.
+
+### Without Docker
+
+```bash
+git clone https://github.com/etherman-os/SavannaGuard && cd SavannaGuard
+pnpm install
+pnpm build
+cp .env.example .env
+# Edit .env — set SECRET_KEY and ADMIN_PASSWORD
+pnpm --filter @savannaguard/server start
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SECRET_KEY` | ✅ Yes | — | Token encryption key. Generate with `openssl rand -hex 32`. |
+| `ADMIN_PASSWORD` | No | `admin` | Admin dashboard login password. |
+| `PORT` | No | `3000` | HTTP server port. |
+| `DB_PATH` | No | `./data/savannaguard.db` | SQLite database path. Use `/data/` prefix in Docker. |
+| `LOG_LEVEL` | No | `info` | Logging verbosity: `debug`, `info`, `warn`, `error`. |
+| `FEDERATION_ENABLED` | No | `false` | Enable P2P federation for sharing bot signatures. |
+| `FEDERATION_PEERS` | No | — | Comma-separated peer URLs (e.g. `https://sg1.example.com,https://sg2.example.com`). |
+| `FEDERATION_PSK` | No | — | Pre-shared key for peer authentication. Required if federation is enabled. |
+| `FEDERATION_SYNC_INTERVAL` | No | `300000` | Active peer sync interval in ms (5 min). |
+| `FEDERATION_OFFLINE_SYNC_INTERVAL` | No | `1800000` | Offline peer recovery interval in ms (30 min). |
+| `FEDERATION_OFFLINE_THRESHOLD` | No | `3` | Consecutive failures before marking peer offline. |
+| `FEDERATION_MAX_PAYLOAD_BYTES` | No | `5242880` | Max sync payload size in bytes (5 MB). |
+| `FEDERATION_REQUEST_TIMEOUT_MS` | No | `30000` | Peer request timeout in ms. |
+| `FEDERATION_MAX_RETRIES` | No | `3` | Max retry attempts for failed peer requests. |
+| `FEDERATION_BASE_RETRY_DELAY_MS` | No | `5000` | Base delay between retries in ms. |
+| `FEDERATION_MAX_RETRY_DELAY_MS` | No | `60000` | Maximum delay between retries in ms. |
+
+### Health Check
+
+The server exposes a `/health` endpoint that returns `{"ok": true}`. Docker Compose uses this for automatic container health checks.
+
+### Federation Setup
+
+To enable P2P bot intelligence sharing between SavannaGuard instances:
+
+1. Set `FEDERATION_ENABLED=true` on both instances
+2. Set the same `FEDERATION_PSK` on both instances
+3. Add each instance's URL to the other's `FEDERATION_PEERS`
+4. Restart both instances
+
+See [FEDERATION.md](FEDERATION.md) for the full protocol specification.
 
 ## Usage Summary
 
@@ -101,7 +166,7 @@ document.getElementById('my-form').addEventListener('submit', async (e) => {
 ## Architecture
 
 - **Server**: Fastify + SQLite — handles PoW challenges, token generation, session scoring
-- **Widget**: Vanilla TS via Vite — Web Worker PoW solver, behavioral collectors (5.8kb gzip)
+- **Widget**: Vanilla TS via Vite — Web Worker PoW solver, behavioral collectors (6.6kb gzip)
 - **Admin**: Alpine.js UI served by server — stats, flagged sessions, settings
 
 ## The Science Behind Detection

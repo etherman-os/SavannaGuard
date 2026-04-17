@@ -15,7 +15,7 @@ export interface MouseData {
 
 export async function collectMouseData(): Promise<MouseData> {
   const points: MousePoint[] = [];
-  const COLLECTION_MS = 3000;
+  const collectionMs = 2500 + Math.floor(Math.random() * 1500);
 
   const handler = (e: MouseEvent) => {
     points.push({ x: e.clientX, y: e.clientY, t: Date.now() });
@@ -23,7 +23,7 @@ export async function collectMouseData(): Promise<MouseData> {
 
   document.addEventListener('mousemove', handler, { passive: true });
 
-  await new Promise((resolve) => setTimeout(resolve, COLLECTION_MS));
+  await new Promise<void>((resolve) => setTimeout(resolve, collectionMs));
 
   document.removeEventListener('mousemove', handler);
 

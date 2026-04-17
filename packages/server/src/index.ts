@@ -27,6 +27,27 @@ export function buildServer(): FastifyInstance {
   adminRoutes(app);
   federationRoutes(app);
 
+  const staticDir = resolve(__dirname, 'static');
+  app.get('/admin/static/*', async (req, rep) => {
+    const routeParams = req.params as Record<string, string | undefined>;
+    const requestedPath = routeParams['*'] ?? '';
+    const normalizedPath = normalize(requestedPath);
+    if (normalizedPath.includes('..')) return rep.status(403).send('Forbidden');
+    const filePath = resolve(staticDir, normalizedPath);
+    if (!filePath.startsWith(staticDir + sep)) return rep.status(403).send('Forbidden');
+    try {
+      const fileStats = statSync(filePath);
+      if (!fileStats.isFile()) return rep.status(404).send('Not found');
+      const content = readFileSync(filePath);
+      const ext = extname(filePath);
+      if (ext === '.js') return rep.type('application/javascript').send(content);
+      if (ext === '.css') return rep.type('text/css').send(content);
+      return rep.type('application/octet-stream').send(content);
+    } catch {
+      return rep.status(404).send('Not found');
+    }
+  });
+
   app.get('/widget/*', async (req, rep) => {
     const routeParams = req.params as Record<string, string | undefined>;
     const requestedPath = routeParams['*'] ?? '';

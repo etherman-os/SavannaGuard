@@ -20,9 +20,22 @@ export const config = {
     minConfidence: parseFloat(process.env.FEDERATION_MIN_CONFIDENCE ?? '0.7'),
     minReporters: parseInt(process.env.FEDERATION_MIN_REPORTERS ?? '2', 10),
     psk: process.env.FEDERATION_PSK ?? '',
+    requestTimeoutMs: parseInt(process.env.FEDERATION_REQUEST_TIMEOUT_MS ?? '30000', 10),
+    maxRetries: parseInt(process.env.FEDERATION_MAX_RETRIES ?? '3', 10),
+    baseRetryDelayMs: parseInt(process.env.FEDERATION_BASE_RETRY_DELAY_MS ?? '5000', 10),
+    maxRetryDelayMs: parseInt(process.env.FEDERATION_MAX_RETRY_DELAY_MS ?? '60000', 10),
+    offlineSyncIntervalMs: parseInt(process.env.FEDERATION_OFFLINE_SYNC_INTERVAL_MS ?? '1800000', 10),
+    offlineThreshold: parseInt(process.env.FEDERATION_OFFLINE_THRESHOLD ?? '3', 10),
+    maxPayloadBytes: parseInt(process.env.FEDERATION_MAX_PAYLOAD_BYTES ?? '5242880', 10),
   },
   rateLimit: {
     maxChallengesPerMinute: 10,
     windowMs: 60 * 1000, // 1 minute
+  },
+  passiveProtection: {
+    enabled: process.env.PASSIVE_PROTECTION_ENABLED !== 'false',
+    blockDatacenterIPs: process.env.PASSIVE_PROTECTION_BLOCK_DC === 'true',
+    datacenterRateLimitMax: parseInt(process.env.PASSIVE_PROTECTION_DC_RATE_LIMIT ?? '3', 10),
+    customBlockRanges: process.env.PASSIVE_PROTECTION_CUSTOM_RANGES?.split(',').map((value) => value.trim()).filter(Boolean) ?? [],
   },
 };

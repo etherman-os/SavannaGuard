@@ -7,6 +7,8 @@ import { calculateAllScores, calculateOverallScore, getVerdict } from '../servic
 import { adaptScores, learnFromSession } from '../services/adaptive.js';
 import { adaptPowDifficulty } from '../services/adaptivePow.js';
 import { checkBotSignature, recordBotSignature, hashUserAgent } from '../services/botSignatures.js';
+import { deriveObfKey, deobfuscatePayload } from '../services/obfuscation.js';
+import { checkPassiveProtection, checkDcRateLimit } from '../services/passiveProtection.js';
 import crypto from 'crypto';
 import { config } from '../config.js';
 
@@ -32,12 +34,17 @@ interface KeyboardDataInput {
 interface CanvasDataInput {
   canvasHash?: string;
   isCanvasSupported?: boolean;
+  canvasBlankHash?: string;
+  webglRendererFromCanvas?: string;
 }
 
 interface WebGLDataInput {
   renderer?: string;
   vendor?: string;
   hasWebGL?: boolean;
+  webglExtensions?: number;
+  maxTextureSize?: number;
+  maxRenderbufferSize?: number;
 }
 
 interface ScreenDataInput {
@@ -103,6 +110,7 @@ interface SolveRequestBody {
   challengeId: string;
   solution: string;
   sessionId: string;
+  d?: string;
   mouseData?: MouseDataInput;
   timingData?: TimingDataInput;
   keyboardData?: KeyboardDataInput;
@@ -123,9 +131,29 @@ function hashIp(ip: string): string {
 
 export function challengeRoutes(app: FastifyInstance) {
   app.post('/api/v1/challenge/create', async (req, rep) => {
+    const clientIp = req.ip ?? 'unknown';
+
+    // Passive protection: block datacenter IPs if configured
+    const passiveCheck = checkPassiveProtection(clientIp);
+    if (passiveCheck.blocked) {
+      return rep.status(403).send({ error: 'Access denied', reason: passiveCheck.reason });
+    }
+
+    // Stricter rate limit for datacenter IPs
+    if (passiveCheck.isDatacenter) {
+      const ipHash = hashIp(clientIp);
+      const dcLimit = checkDcRateLimit(ipHash);
+      if (!dcLimit.allowed) {
+        return rep.status(429).send({
+          error: 'Too many requests',
+          retryAfter: Math.ceil((dcLimit.resetAt - Date.now()) / 1000),
+        });
+      }
+    }
+
     cleanupExpiredRows();
 
-    const ipHash = hashIp(req.ip ?? 'unknown');
+    const ipHash = hashIp(clientIp);
     const rateLimit = checkRateLimit(ipHash);
     if (!rateLimit.allowed) {
       return rep.status(429).send({
@@ -148,22 +176,60 @@ export function challengeRoutes(app: FastifyInstance) {
       'INSERT INTO sessions (id, created_at, ip_hash, user_agent) VALUES (?, ?, ?, ?)'
     ).run(sessionId, Date.now(), ipHash, req.headers['user-agent'] ?? '');
 
+    const obfKey = deriveObfKey(sessionId, challenge.id);
+
     return {
       challengeId: challenge.id,
       nonce: challenge.nonce,
       difficulty: challenge.difficulty,
       sessionId,
+      obfKey,
     };
   });
 
   app.post('/api/v1/challenge/solve', async (req, rep) => {
-    const body = (req.body ?? {}) as Partial<SolveRequestBody>;
+    const clientIp = req.ip ?? 'unknown';
 
-    if (typeof body.challengeId !== 'string' || typeof body.solution !== 'string' || typeof body.sessionId !== 'string') {
+    // Passive protection: block datacenter IPs if configured
+    const passiveCheck = checkPassiveProtection(clientIp);
+    if (passiveCheck.blocked) {
+      return rep.status(403).send({ error: 'Access denied', reason: passiveCheck.reason });
+    }
+
+    // Stricter rate limit for datacenter IPs
+    if (passiveCheck.isDatacenter) {
+      const dcIpHash = hashIp(clientIp);
+      const dcLimit = checkDcRateLimit(dcIpHash);
+      if (!dcLimit.allowed) {
+        return rep.status(429).send({
+          error: 'Too many requests',
+          retryAfter: Math.ceil((dcLimit.resetAt - Date.now()) / 1000),
+        });
+      }
+    }
+
+    const rawBody = (req.body ?? {}) as Record<string, unknown>;
+
+    if (typeof rawBody.challengeId !== 'string' || typeof rawBody.solution !== 'string' || typeof rawBody.sessionId !== 'string') {
       return rep.status(400).send({ error: 'Invalid payload' });
     }
 
-    const { challengeId, solution, sessionId } = body;
+    const { challengeId, solution, sessionId } = rawBody as { challengeId: string; solution: string; sessionId: string };
+
+    let body: SolveRequestBody;
+
+    if (typeof rawBody.d === 'string' && rawBody.d.length > 0) {
+      try {
+        const obfKey = deriveObfKey(sessionId, challengeId);
+        const json = deobfuscatePayload(rawBody.d, obfKey);
+        const decoded = JSON.parse(json) as Record<string, unknown>;
+        body = { challengeId, solution, sessionId, ...decoded } as SolveRequestBody;
+      } catch {
+        return rep.status(400).send({ error: 'Invalid payload encoding' });
+      }
+    } else {
+      body = rawBody as unknown as SolveRequestBody;
+    }
 
     const challengeRow = db.prepare('SELECT * FROM challenges WHERE id = ?').get(challengeId) as {
       id: string;
@@ -196,9 +262,18 @@ export function challengeRoutes(app: FastifyInstance) {
     if (body.keyboardData) Object.assign(behavioral, body.keyboardData);
     if (body.canvasData) Object.assign(behavioral, body.canvasData);
     if (body.webglData) Object.assign(behavioral, body.webglData);
-    if (body.screenData) Object.assign(behavioral, body.screenData);
+    if (body.screenData) {
+      behavioral.screenWidth = body.screenData.width;
+      behavioral.screenHeight = body.screenData.height;
+      behavioral.colorDepth = body.screenData.colorDepth;
+      behavioral.pixelRatio = body.screenData.pixelRatio;
+    }
     if (body.navigatorData) Object.assign(behavioral, body.navigatorData);
-    if (body.networkData) Object.assign(behavioral, body.networkData);
+    if (body.networkData) {
+      behavioral.latencyMs = body.networkData.latencyMs;
+      behavioral.networkType = body.networkData.effectiveType;
+      behavioral.networkDownlink = body.networkData.downlink;
+    }
     if (body.timingOracleData) {
       behavioral.timingOracle = body.timingOracleData;
     }
@@ -232,6 +307,11 @@ export function challengeRoutes(app: FastifyInstance) {
     // Apply known bot penalty
     if (botCheck.isKnownBot) {
       finalScore = Math.round(finalScore * (1 - botCheck.confidence * 0.5));
+    }
+
+    // Global spoofing penalty: multiply by 0.6 when 1+ spoofing signals detected
+    if (signalScores.spoofingFlags >= 1) {
+      finalScore = Math.round(finalScore * 0.6);
     }
 
     finalScore = Math.max(0, Math.min(100, finalScore));

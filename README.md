@@ -184,16 +184,56 @@ We invite security researchers to attempt bypass. Open an issue with your approa
 
 ## API Endpoints
 
+### Public API
+
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | /api/v1/challenge/create | Create PoW challenge |
 | POST | /api/v1/challenge/solve | Submit PoW solution + behavioral data |
 | POST | /api/v1/token/validate | Validate a token |
-| GET | /admin | Admin stats page |
+| GET | /health | Health check (returns `{"ok":true}`) |
+| GET | /widget/savanna-widget.iife.js | Widget JavaScript bundle |
+
+### Admin Panel
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /admin | Admin dashboard (stats page) |
 | GET | /admin/threat | Threat intelligence tab |
-| GET | /admin/flagged | Flagged sessions page |
+| GET | /admin/flagged | Flagged bot sessions |
 | GET | /admin/settings | Settings page |
-| GET | /admin/federation | Federation management |
+| GET | /admin/federation | Federation peer management |
+| GET | /admin/vpn | VPN Detection (upsell) |
+| GET | /admin/mobile | Mobile SDK (upsell) |
+| GET | /admin/multi-tenant | Multi-Tenant (upsell) |
+
+### Admin API (authenticated)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /admin/api/stats | Dashboard statistics |
+| GET | /admin/api/stats/timeseries | Time-series chart data |
+| GET | /admin/api/threat | Threat intelligence data |
+| GET | /admin/api/learning | ML learning data |
+| GET | /admin/api/signatures | Bot signature database |
+| GET | /admin/api/flagged | Flagged session list |
+| GET | /admin/api/settings | Current settings |
+| POST | /admin/api/settings | Update settings |
+| GET | /admin/api/passive-protection | Passive protection stats |
+| GET | /admin/api/federation/peers | List federation peers |
+| POST | /admin/api/federation/peers | Add federation peer |
+| DELETE | /admin/api/federation/peers/:peerId | Remove federation peer |
+| POST | /admin/api/federation/sync | Trigger federation sync |
+| GET | /admin/api/federation/stats | Federation statistics |
+
+### Federation (P2P, authenticated via HMAC)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /federation/state | Get bot signature state |
+| POST | /federation/state | Receive signature state (pull response) |
+| POST | /federation/push | Push new signatures to peer |
+| POST | /federation/sync | Pull signatures from peer |
 
 ## Comparison
 

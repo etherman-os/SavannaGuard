@@ -1,7 +1,7 @@
 /// <reference types="vitest/globals" />
 // NOTE: adaptPowDifficulty and getThreatStatus are in adaptivePow.ts
 import { adaptPowDifficulty, getThreatStatus } from '../src/services/adaptivePow.js';
-import { db, getPowDifficulty, setPowDifficulty } from '../src/db.js';
+import { db, getPowDifficulty, setPowDifficulty, setAdaptivePowEnabled } from '../src/db.js';
 
 describe('adaptivePow service (Difficulty Adjustment)', () => {
   const originalDifficulty = getPowDifficulty();
@@ -9,6 +9,7 @@ describe('adaptivePow service (Difficulty Adjustment)', () => {
   afterEach(() => {
     // Reset difficulty to original after each test
     setPowDifficulty(originalDifficulty);
+    setAdaptivePowEnabled(true);
   });
 
   describe('adaptPowDifficulty', () => {
@@ -26,9 +27,9 @@ describe('adaptivePow service (Difficulty Adjustment)', () => {
       expect(result.threat).toHaveProperty('botCount');
     });
 
-    it('difficulty is within valid range (1-6)', () => {
+    it('difficulty is within valid range (3-6)', () => {
       const result = adaptPowDifficulty();
-      expect(result.difficulty).toBeGreaterThanOrEqual(1);
+      expect(result.difficulty).toBeGreaterThanOrEqual(3);
       expect(result.difficulty).toBeLessThanOrEqual(6);
     });
 
@@ -70,12 +71,23 @@ describe('adaptivePow service (Difficulty Adjustment)', () => {
 
       const validReasons = [
         'Not enough data',
+        'Adaptive PoW disabled',
         'Threat level HIGH - increasing difficulty',
         'Threat level LOW - decreasing difficulty',
         'Threat level NORMAL - maintaining difficulty',
       ];
 
       expect(validReasons).toContain(result.reason);
+    });
+
+    it('does not auto-adjust when adaptive mode is disabled', () => {
+      setPowDifficulty(5);
+      setAdaptivePowEnabled(false);
+
+      const result = adaptPowDifficulty();
+
+      expect(result.difficulty).toBe(5);
+      expect(result.reason).toBe('Adaptive PoW disabled');
     });
   });
 
@@ -87,11 +99,13 @@ describe('adaptivePow service (Difficulty Adjustment)', () => {
       expect(status).toHaveProperty('difficulty');
       expect(status).toHaveProperty('totalSessions');
       expect(status).toHaveProperty('botCount');
+      expect(status).toHaveProperty('adaptiveEnabled');
 
       expect(typeof status.botRatio).toBe('number');
       expect(typeof status.difficulty).toBe('number');
       expect(typeof status.totalSessions).toBe('number');
       expect(typeof status.botCount).toBe('number');
+      expect(typeof status.adaptiveEnabled).toBe('boolean');
     });
 
     it('botRatio is percentage (0-100)', () => {
@@ -102,7 +116,7 @@ describe('adaptivePow service (Difficulty Adjustment)', () => {
 
     it('difficulty is within valid range', () => {
       const status = getThreatStatus();
-      expect(status.difficulty).toBeGreaterThanOrEqual(1);
+      expect(status.difficulty).toBeGreaterThanOrEqual(3);
       expect(status.difficulty).toBeLessThanOrEqual(6);
     });
 

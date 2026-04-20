@@ -24,9 +24,13 @@ import {
   getFederationStats,
   getTopFederatedSignatures,
   recordFederatedSignature,
+  getFederationPsk,
+  invalidatePskCache,
 } from '../services/federation.js';
+import { db } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../services/logger.js';
+import { checkAdminRateLimit } from '../services/rateLimit.js';
 
 const ADMIN_COOKIE_NAME = 'savanna_admin';
 const MAX_PAYLOAD_BYTES = Number.isFinite(config.federation.maxPayloadBytes) && config.federation.maxPayloadBytes > 0
@@ -61,9 +65,26 @@ function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
 
 function requireAdminCsrf(request: FastifyRequest, reply: FastifyReply): boolean {
   if (!requireAdmin(request, reply)) return false;
+  // Check custom header (existing)
   const header = request.headers['x-requested-with'] ?? '';
   if (typeof header !== 'string' || header !== 'SavannaAdmin') {
     reply.status(403).send({ error: 'Forbidden' });
+    return false;
+  }
+  // Double-submit cookie CSRF check (timing-safe comparison)
+  const cookieToken = request.cookies['savanna_csrf'];
+  const headerToken = typeof request.headers['x-csrf-token'] === 'string' ? request.headers['x-csrf-token'] : '';
+  if (!cookieToken || !headerToken || !safeEquals(cookieToken, headerToken)) {
+    reply.status(403).send({ error: 'Invalid CSRF token' });
+    return false;
+  }
+  return true;
+}
+
+function checkAdminRate(request: FastifyRequest, reply: FastifyReply): boolean {
+  const result = checkAdminRateLimit(request.ip ?? 'unknown');
+  if (!result.allowed) {
+    reply.status(429).send({ error: 'Too many requests', retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) });
     return false;
   }
   return true;
@@ -236,6 +257,7 @@ export function federationRoutes(app: FastifyInstance) {
    */
   app.get('/admin/api/federation/peers', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     return listPublicPeers();
   });
 
@@ -245,6 +267,7 @@ export function federationRoutes(app: FastifyInstance) {
    */
   app.post('/admin/api/federation/peers', async (req, rep) => {
     if (!requireAdminCsrf(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const body = req.body as { peerUrl?: string; psk?: string };
     if (!body.peerUrl || !body.psk) {
@@ -266,6 +289,7 @@ export function federationRoutes(app: FastifyInstance) {
    */
   app.delete('/admin/api/federation/peers/:peerId', async (req, rep) => {
     if (!requireAdminCsrf(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const { peerId } = req.params as { peerId: string };
     removePeer(peerId);
@@ -278,6 +302,7 @@ export function federationRoutes(app: FastifyInstance) {
    */
   app.post('/admin/api/federation/sync', async (req, rep) => {
     if (!requireAdminCsrf(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const body = (req.body ?? {}) as { peerUrl?: string };
     if (!body.peerUrl || body.peerUrl.trim().length === 0) {
@@ -297,11 +322,49 @@ export function federationRoutes(app: FastifyInstance) {
   });
 
   /**
+   * GET /admin/api/federation/psk
+   * Get masked info about the current federation PSK
+   */
+  app.get('/admin/api/federation/psk', async (req, rep) => {
+    if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
+
+    const currentPsk = getFederationPsk();
+    if (!currentPsk || currentPsk.length < 16) {
+      return { hasPsk: !!currentPsk, masked: '' };
+    }
+    const masked = currentPsk.slice(0, 8) + '...' + currentPsk.slice(-8);
+    return { hasPsk: true, masked };
+  });
+
+  /**
+   * POST /admin/api/federation/rotate-psk
+   * Generate a new federation PSK and save it to the settings table
+   */
+  app.post('/admin/api/federation/rotate-psk', async (req, rep) => {
+    if (!requireAdminCsrf(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
+
+    const newPsk = crypto.randomBytes(32).toString('hex');
+    // Save to settings table for persistence across restarts
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('federation_psk', newPsk);
+    // Update runtime config so it takes effect immediately
+    config.federation.psk = newPsk;
+    // Invalidate cached PSK so next access picks up the new value
+    invalidatePskCache();
+
+    logger.info('federation:psk', 'Federation PSK rotated via admin');
+
+    return { ok: true, psk: newPsk };
+  });
+
+  /**
    * GET /admin/api/federation/stats
    * Get federation statistics
    */
   app.get('/admin/api/federation/stats', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const stats = getFederationStats();
     const topSignatures = getTopFederatedSignatures(10);

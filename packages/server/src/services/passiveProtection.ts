@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { isDatacenterIP, getDatacenterRangeCount } from './datacenterRanges.js';
+import { getBlockDatacenterIPs } from '../db.js';
 
 interface DcRateLimitEntry {
   count: number;
@@ -44,7 +45,7 @@ export function checkPassiveProtection(ip: string): PassiveProtectionResult {
     resetDcStatsIfNeeded();
     dcDetectionsLast24h++;
 
-    if (config.passiveProtection.blockDatacenterIPs) {
+    if (getBlockDatacenterIPs()) {
       return { blocked: true, isDatacenter: true, reason: 'datacenter_ip' };
     }
   }
@@ -112,7 +113,7 @@ export function getPassiveProtectionStats(): PassiveProtectionStats {
   resetDcStatsIfNeeded();
   return {
     enabled: config.passiveProtection.enabled,
-    blockDatacenterIPs: config.passiveProtection.blockDatacenterIPs,
+    blockDatacenterIPs: getBlockDatacenterIPs(),
     datacenterRangesCount: getDatacenterRangeCount(config.passiveProtection.customBlockRanges),
     customRangesCount: config.passiveProtection.customBlockRanges.length,
     datacenterRateLimitMax: config.passiveProtection.datacenterRateLimitMax,

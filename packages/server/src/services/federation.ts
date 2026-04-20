@@ -96,7 +96,7 @@ export interface SyncAllResult {
 }
 
 interface PullResult {
-  signatures: FederatedSignature[];
+  signatures: unknown[];
   stateHash: string;
   syncVersion: number;
 }
@@ -107,7 +107,7 @@ const FEDERATION_CONFIG = {
   syncIntervalMs: Number.isFinite(config.federation.syncIntervalMs) ? Math.max(1000, config.federation.syncIntervalMs) : 300000,
   minConfidence: Number.isFinite(config.federation.minConfidence) ? Math.max(0, Math.min(1, config.federation.minConfidence)) : 0.7,
   minReporters: Number.isFinite(config.federation.minReporters) ? Math.max(1, config.federation.minReporters) : 2,
-  psk: config.federation.psk,
+  get psk(): string { return getFederationPsk(); },
   requestTimeoutMs: Number.isFinite(config.federation.requestTimeoutMs) ? Math.max(1000, config.federation.requestTimeoutMs) : 30000,
   maxRetries: Number.isFinite(config.federation.maxRetries) ? Math.max(0, config.federation.maxRetries) : 3,
   baseRetryDelayMs: Number.isFinite(config.federation.baseRetryDelayMs) ? Math.max(0, config.federation.baseRetryDelayMs) : 5000,
@@ -116,6 +116,33 @@ const FEDERATION_CONFIG = {
   offlineThreshold: Number.isFinite(config.federation.offlineThreshold) ? Math.max(1, config.federation.offlineThreshold) : 3,
   maxPayloadBytes: Number.isFinite(config.federation.maxPayloadBytes) ? Math.max(1024, config.federation.maxPayloadBytes) : 5242880,
 };
+
+/**
+ * Get the current federation PSK.
+ * Reads from the DB settings table first (supports runtime rotation),
+ * falls back to the config/env var value.
+ * Cached with a 60-second TTL to avoid DB query on every access.
+ */
+let cachedPsk: string | null = null;
+let pskCachedAt = 0;
+const PSK_CACHE_TTL_MS = 60000;
+
+export function getFederationPsk(): string {
+  const now = Date.now();
+  if (cachedPsk && now - pskCachedAt < PSK_CACHE_TTL_MS) return cachedPsk;
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'federation_psk'").get() as { value: string } | undefined;
+  cachedPsk = row && row.value ? row.value : config.federation.psk;
+  pskCachedAt = now;
+  return cachedPsk;
+}
+
+/**
+ * Invalidate the cached PSK (call after rotation).
+ */
+export function invalidatePskCache(): void {
+  cachedPsk = null;
+  pskCachedAt = 0;
+}
 
 let activeSyncInterval: ReturnType<typeof setInterval> | null = null;
 let offlineSyncInterval: ReturnType<typeof setInterval> | null = null;
@@ -131,6 +158,17 @@ interface DbPeerRow {
   last_failure_at: number;
   last_failure_reason: string;
   last_success_at: number;
+}
+
+function normalizePeerUrl(peerUrl: string): string {
+  const trimmed = peerUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    const normalizedPath = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+  } catch {
+    return trimmed;
+  }
 }
 
 function mapPeerRow(row: DbPeerRow): FederationPeer {
@@ -151,8 +189,12 @@ function mapPeerRow(row: DbPeerRow): FederationPeer {
 /**
  * Validate peer URL to prevent SSRF attacks.
  * Rejects localhost, private/reserved IP ranges, and non-HTTP protocols.
+ * When FEDERATION_ALLOW_PRIVATE_PEERS is set, private IP validation is relaxed
+ * for Docker/internal network deployments.
  */
 function validatePeerUrl(peerUrl: string): void {
+  const allowPrivatePeers = process.env.FEDERATION_ALLOW_PRIVATE_PEERS === 'true';
+
   let parsed: URL;
   try {
     parsed = new URL(peerUrl);
@@ -161,6 +203,11 @@ function validatePeerUrl(peerUrl: string): void {
   }
 
   const hostname = parsed.hostname.toLowerCase();
+  const protocol = parsed.protocol;
+
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error('Peer URL must use http or https protocol');
+  }
 
   // Reject localhost variants
   // Normalize IPv6 addresses by stripping brackets
@@ -169,42 +216,67 @@ function validatePeerUrl(peerUrl: string): void {
     throw new Error('Peer URL cannot reference localhost');
   }
 
+  // For Docker/internal integration, allow non-routable hostnames (e.g. node-a, peer.internal)
+  // only when explicit private-peer mode is enabled.
+  if (!hostname.includes('.')) {
+    if (!allowPrivatePeers) {
+      throw new Error('Peer URL must use a routable hostname or public IP');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Peer URL must use http or https protocol');
+    }
+    return;
+  }
+
   // Reject link-local / metadata endpoints (169.254.x.x)
   if (hostname.startsWith('169.254.')) {
     throw new Error('Peer URL cannot reference link-local range (169.254.x.x)');
   }
 
-  // Reject private IP ranges: 10.x.x.x, 172.16.x.x-172.31.x.x, 192.168.x.x
   const parts = hostname.split('.');
-  if (parts.length === 4) {
-    const [a, b] = parts.map(Number);
-    if (a === 10) throw new Error('Peer URL cannot reference private range (10.x.x.x)');
-    if (a === 172 && b >= 16 && b <= 31) {
-      throw new Error('Peer URL cannot reference private range (172.16.x.x-172.31.x.x)');
-    }
-    if (a === 192 && b === 168) {
-      throw new Error('Peer URL cannot reference private range (192.168.x.x)');
-    }
-  }
-
-  // Reject numeric IPv4 addresses in private/reserved ranges
   const ip = parts.map(Number);
-  if (ip.length === 4 && ip.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
-    const ipInt = (ip[0] << 24 | ip[1] << 16 | ip[2] << 8 | ip[3]) >>> 0;
-    // 10.0.0.0/8
-    if ((ipInt & 0xff000000) === 0x0a000000) throw new Error('Peer URL cannot reference private range (10.x.x.x)');
-    // 172.16.0.0/12
-    if ((ipInt & 0xfff00000) === 0xac100000) throw new Error('Peer URL cannot reference private range (172.16.x.x-172.31.x.x)');
-    // 192.168.0.0/16
-    if ((ipInt & 0xffff0000) === 0xc0a80000) throw new Error('Peer URL cannot reference private range (192.168.x.x)');
-    // 169.254.0.0/16 (link-local)
-    if ((ipInt & 0xffff0000) === 0xa9fe0000) throw new Error('Peer URL cannot reference link-local range (169.254.x.x)');
+  const isNumericIpv4 = ip.length === 4 && ip.every(n => !isNaN(n) && n >= 0 && n <= 255);
+  const isPrivateIpv4 = isNumericIpv4 && (
+    (ip[0] === 10) ||
+    (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31) ||
+    (ip[0] === 192 && ip[1] === 168)
+  );
+  const isLinkLocalIpv4 = isNumericIpv4 && ip[0] === 169 && ip[1] === 254;
+
+  // Reject private IP ranges when not explicitly allowed
+
+  if (!allowPrivatePeers) {
+    if (parts.length === 4) {
+      const [a, b] = parts.map(Number);
+      if (a === 10) throw new Error('Peer URL cannot reference private range (10.x.x.x)');
+      if (a === 172 && b >= 16 && b <= 31) {
+        throw new Error('Peer URL cannot reference private range (172.16.x.x-172.31.x.x)');
+      }
+      if (a === 192 && b === 168) {
+        throw new Error('Peer URL cannot reference private range (192.168.x.x)');
+      }
+    }
+
+    // Reject numeric IPv4 addresses in private/reserved ranges
+    if (ip.length === 4 && ip.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
+      const ipInt = (ip[0] << 24 | ip[1] << 16 | ip[2] << 8 | ip[3]) >>> 0;
+      // 10.0.0.0/8
+      if ((ipInt & 0xff000000) === 0x0a000000) throw new Error('Peer URL cannot reference private range (10.x.x.x)');
+      // 172.16.0.0/12
+      if ((ipInt & 0xfff00000) === 0xac100000) throw new Error('Peer URL cannot reference private range (172.16.x.x-172.31.x.x)');
+      // 192.168.0.0/16
+      if ((ipInt & 0xffff0000) === 0xc0a80000) throw new Error('Peer URL cannot reference private range (192.168.x.x)');
+      // 169.254.0.0/16 (link-local)
+      if ((ipInt & 0xffff0000) === 0xa9fe0000) throw new Error('Peer URL cannot reference link-local range (169.254.x.x)');
+    }
   }
 
-  // Finally, reject non-https protocols
-  const protocol = parsed.protocol;
-  if (protocol !== 'https:') {
+  // Finally, reject non-https protocols unless private peers are allowed (for internal networks)
+  if (protocol !== 'https:' && !allowPrivatePeers) {
     throw new Error('Peer URL must use https protocol');
+  }
+  if (protocol !== 'https:' && allowPrivatePeers && !(isPrivateIpv4 || isLinkLocalIpv4)) {
+    throw new Error('Peer URL must use https protocol for non-private hosts');
   }
 }
 
@@ -213,19 +285,50 @@ function validatePeerUrl(peerUrl: string): void {
  */
 export function addPeer(peerUrl: string, psk: string): FederationPeer {
   validatePeerUrl(peerUrl);
-  const peerId = crypto.randomUUID();
+  const normalizedPeerUrl = normalizePeerUrl(peerUrl);
   const now = Date.now();
+
+  const existing = getPeerByUrl(normalizedPeerUrl);
+
+  if (existing) {
+    db.prepare(
+      `UPDATE federation_peers
+       SET psk = ?, trusted = 1, status = 'active', consecutive_failures = 0,
+           last_failure_at = 0, last_failure_reason = '', last_seen = ?, last_success_at = ?
+       WHERE peer_id = ?`
+    ).run(psk, now, now, existing.peerId);
+
+    logger.info('federation:peer', 'Peer updated', {
+      peerUrl: normalizedPeerUrl,
+      peerId: existing.peerId,
+    });
+
+    return {
+      peerId: existing.peerId,
+      peerUrl: normalizedPeerUrl,
+      psk,
+      lastSeen: now,
+      trusted: true,
+      status: 'active',
+      consecutiveFailures: 0,
+      lastFailureAt: 0,
+      lastFailureReason: '',
+      lastSuccessAt: now,
+    };
+  }
+
+  const peerId = crypto.randomUUID();
 
   db.prepare(
     `INSERT INTO federation_peers (peer_id, peer_url, psk, last_seen, trusted, status, consecutive_failures, last_failure_at, last_failure_reason, last_success_at)
      VALUES (?, ?, ?, ?, 1, 'active', 0, 0, '', ?)`
-  ).run(peerId, peerUrl, psk, now, now);
+  ).run(peerId, normalizedPeerUrl, psk, now, now);
 
-  logger.info('federation:peer', 'Peer added', { peerUrl, peerId });
+  logger.info('federation:peer', 'Peer added', { peerUrl: normalizedPeerUrl, peerId });
 
   return {
     peerId,
-    peerUrl,
+    peerUrl: normalizedPeerUrl,
     psk,
     lastSeen: now,
     trusted: true,
@@ -276,7 +379,8 @@ export function listPublicPeers(): FederationPeerPublic[] {
  * Get peer by URL
  */
 export function getPeerByUrl(peerUrl: string): FederationPeer | null {
-  const row = db.prepare('SELECT * FROM federation_peers WHERE peer_url = ?').get(peerUrl) as DbPeerRow | undefined;
+  const normalizedPeerUrl = normalizePeerUrl(peerUrl);
+  const row = db.prepare('SELECT * FROM federation_peers WHERE peer_url = ?').get(normalizedPeerUrl) as DbPeerRow | undefined;
 
   if (!row) return null;
 
@@ -566,7 +670,6 @@ async function pushSignaturesToPeer(peer: FederationPeer): Promise<void> {
       if (httpError) throw httpError;
 
       if (response.ok) {
-        markPeerSuccess(peer);
         logger.info('federation:push', 'Push succeeded', { peerUrl: peer.peerUrl, count: String(signatures.length) });
       }
 
@@ -625,7 +728,7 @@ async function pullSignaturesFromPeer(peer: FederationPeer): Promise<PullResult>
 
       checkPayloadSize(response, peer.peerUrl);
 
-      let data: { signatures: FederatedSignature[]; stateHash?: string; syncVersion?: number };
+      let data: { signatures?: unknown; stateHash?: unknown; syncVersion?: unknown };
       try {
         data = await response.json() as typeof data;
       } catch (error: unknown) {
@@ -633,6 +736,11 @@ async function pullSignaturesFromPeer(peer: FederationPeer): Promise<PullResult>
       }
 
       const safeSignatures = Array.isArray(data.signatures) ? data.signatures : [];
+      const stateHash = typeof data.stateHash === 'string' ? data.stateHash : (state?.last_hash ?? '');
+      const parsedSyncVersion = Number(data.syncVersion);
+      const syncVersion = Number.isFinite(parsedSyncVersion) && parsedSyncVersion >= 0
+        ? Math.trunc(parsedSyncVersion)
+        : (state?.sync_version ?? 0);
 
       markPeerSuccess(peer);
       logger.info('federation:pull', 'Pull succeeded', {
@@ -642,8 +750,8 @@ async function pullSignaturesFromPeer(peer: FederationPeer): Promise<PullResult>
 
       return {
         signatures: safeSignatures,
-        stateHash: data.stateHash ?? state?.last_hash ?? '',
-        syncVersion: data.syncVersion ?? state?.sync_version ?? 0,
+        stateHash,
+        syncVersion,
       };
     },
     {
@@ -675,14 +783,34 @@ export async function syncWithPeer(peerUrl: string): Promise<SyncResult> {
   // Pull first
   try {
     const pullResult = await pullSignaturesFromPeer(peer);
-    for (const sig of pullResult.signatures) {
+
+    for (const rawSig of pullResult.signatures) {
       received++;
+
+      if (!rawSig || typeof rawSig !== 'object') {
+        skipped++;
+        continue;
+      }
+
+      const sig = rawSig as Record<string, unknown>;
+      const hash = String(sig.hash ?? '').slice(0, 128);
+      if (!hash) {
+        skipped++;
+        continue;
+      }
+
+      const hashType = typeof sig.hashType === 'string' && ['ip', 'ua', 'combined'].includes(sig.hashType)
+        ? sig.hashType
+        : 'ip';
+      const attackType = String(sig.attackType ?? 'unknown').slice(0, 50);
+      const confidence = Math.max(0, Math.min(1, Number(sig.confidence ?? 0)));
+
       const result = recordFederatedSignature(
-        sig.hash,
-        sig.hashType,
-        sig.attackType,
-        sig.confidence,
-        sig.sourcePeer,
+        hash,
+        hashType,
+        attackType,
+        confidence,
+        peer.peerId,
       );
       if (result.merged) merged++;
       if (result.skipped) skipped++;
@@ -708,13 +836,6 @@ export async function syncWithPeer(peerUrl: string): Promise<SyncResult> {
   } catch (error: unknown) {
     const reason = error instanceof FederationError ? error.message : String(error);
     errors.push(`Push failed: ${reason}`);
-    // Only mark failure for push if pull also failed (or didn't run)
-    // Push-specific failures are logged but don't affect peer state as severely
-    if (errors.length > 0) {
-      // Peer already marked as failure from pull, don't double-count
-    } else {
-      markPeerFailure(peer, reason);
-    }
   }
 
   logger.info('federation:sync', 'Sync completed', {
@@ -812,7 +933,14 @@ function seedPeersFromConfig(): void {
     if (!normalized) continue;
     if (getPeerByUrl(normalized)) continue;
     if (!FEDERATION_CONFIG.psk) continue;
-    addPeer(normalized, FEDERATION_CONFIG.psk);
+    try {
+      addPeer(normalized, FEDERATION_CONFIG.psk);
+    } catch (err) {
+      logger.warn('federation:seed', 'Skipping invalid peer from config', {
+        peerUrl: normalized,
+        reason: (err as Error).message,
+      });
+    }
   }
 }
 

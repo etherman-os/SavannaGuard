@@ -1,0 +1,90 @@
+# ==============================================================================
+# SavannaGuard — 2-node Federation Integration Test
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up --build
+#   # Then run vitest from host (requires node + pnpm installed on host):
+#   FEDERATION_PSK=test-psk-key-for-federation-testing \
+#   NODE_A_URL=http://localhost:3001 \
+#   NODE_B_URL=http://localhost:3002 \
+#   pnpm --filter @savannaguard/server test -- --testNamePattern="federation-docker"
+#
+# Or run the shell script directly:
+#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+#
+# What it does:
+#   1. Starts node-a (port 3001) and node-b (port 3002) with federation enabled
+#   2. Both nodes share the same PSK and are on a Docker internal network
+#   3. Health checks verify both nodes are ready
+#   4. Vitest tests (or shell script) insert peer records and verify gossip propagation
+#
+# NOTE: FEDERATION_ALLOW_PRIVATE_PEERS=true allows http:// and private IPs so
+# nodes can communicate over the Docker internal network without SSRF validation.
+# ==============================================================================
+
+services:
+  node-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ADMIN_PASSWORD: admin
+      SECRET_KEY: test-secret-key-node-a
+      NODE_ENV: test
+      HOST: 0.0.0.0
+      PORT: 3000
+      DB_PATH: /data/savannaguard.db
+      FEDERATION_ENABLED: "true"
+      FEDERATION_PSK: test-psk-key-for-federation-testing
+      FEDERATION_SYNC_INTERVAL: 5000
+      FEDERATION_PEERS: http://node-b:3000
+      FEDERATION_ALLOW_PRIVATE_PEERS: "true"
+    volumes:
+      - node_a_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    ports:
+      - "3001:3000"
+    networks:
+      - fed-test
+
+  node-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ADMIN_PASSWORD: admin
+      SECRET_KEY: test-secret-key-node-b
+      NODE_ENV: test
+      HOST: 0.0.0.0
+      PORT: 3000
+      DB_PATH: /data/savannaguard.db
+      FEDERATION_ENABLED: "true"
+      FEDERATION_PSK: test-psk-key-for-federation-testing
+      FEDERATION_SYNC_INTERVAL: 5000
+      FEDERATION_PEERS: http://node-a:3000
+      FEDERATION_ALLOW_PRIVATE_PEERS: "true"
+    volumes:
+      - node_b_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    ports:
+      - "3002:3000"
+    networks:
+      - fed-test
+
+volumes:
+  node_a_data:
+  node_b_data:
+
+networks:
+  fed-test:
+    driver: bridge

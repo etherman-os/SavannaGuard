@@ -2,13 +2,14 @@ services:
   savannaguard:
     build:
       context: .
-      dockerfile: packages/server/Dockerfile
+      dockerfile: Dockerfile
     ports:
       - "${PORT:-3000}:3000"
     environment:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required. Set it in your .env file.}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - NODE_ENV=production
+      - HOST=0.0.0.0
       - PORT=3000
       - DB_PATH=/data/savannaguard.db
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -21,6 +22,14 @@ services:
       - FEDERATION_MAX_PAYLOAD_BYTES=${FEDERATION_MAX_PAYLOAD_BYTES:-5242880}
       - FEDERATION_REQUEST_TIMEOUT_MS=${FEDERATION_REQUEST_TIMEOUT_MS:-30000}
       - FEDERATION_MAX_RETRIES=${FEDERATION_MAX_RETRIES:-3}
+      - FEDERATION_BASE_RETRY_DELAY_MS=${FEDERATION_BASE_RETRY_DELAY_MS:-5000}
+      - FEDERATION_MAX_RETRY_DELAY_MS=${FEDERATION_MAX_RETRY_DELAY_MS:-60000}
+      - FEDERATION_ALLOW_PRIVATE_PEERS=${FEDERATION_ALLOW_PRIVATE_PEERS:-false}
+      - ADAPTIVE_MIN_SAMPLES=${ADAPTIVE_MIN_SAMPLES:-10}
+      - PASSIVE_PROTECTION_ENABLED=${PASSIVE_PROTECTION_ENABLED:-true}
+      - PASSIVE_PROTECTION_BLOCK_DC=${PASSIVE_PROTECTION_BLOCK_DC:-false}
+      - PASSIVE_PROTECTION_DC_RATE_LIMIT=${PASSIVE_PROTECTION_DC_RATE_LIMIT:-3}
+      - PASSIVE_PROTECTION_CUSTOM_RANGES=${PASSIVE_PROTECTION_CUSTOM_RANGES:-}
     volumes:
       - savannaguard_data:/data
     healthcheck:

@@ -12,7 +12,11 @@ import {
   scoreNetwork,
   calculateAllScores,
   detectSpoofing,
+  scoreTimingOracle,
+  scoreTremor,
   SignalScores,
+  TimingOracleData,
+  TremorData,
 } from '../src/services/scoring.js';
 
 describe('scoring service', () => {
@@ -854,6 +858,398 @@ describe('scoring service', () => {
       });
       const count = Object.values(flags).filter(Boolean).length;
       expect(count).toBeGreaterThanOrEqual(4); // canvasBlocked + webglRendererMismatch + webglHeadless + pixelRatio + platformUA
+    });
+  });
+
+  describe('scoreTimingOracle', () => {
+    it('returns 50 (neutral) for null input', () => {
+      expect(scoreTimingOracle(null)).toBe(50);
+    });
+
+    it('returns 50 (neutral) for undefined input', () => {
+      expect(scoreTimingOracle(undefined)).toBe(50);
+    });
+
+    it('returns 100 when headlessLikelihood is 0 and no detection signals', () => {
+      // A real browser with zero headless likelihood and no signals
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [10, 12, 11, 13],
+        jitPatternVariance: 2.5,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.95,
+        headlessLikelihood: 0,
+        detectionSignals: [],
+      };
+      expect(scoreTimingOracle(data)).toBe(100);
+    });
+
+    it('returns 0 when headlessLikelihood is 100 and no detection signals', () => {
+      // Maximum headless likelihood
+      const data: TimingOracleData = {
+        performanceNowMonotonic: false,
+        setTimeoutDriftMs: 500,
+        dateNowVsPerformanceNowDriftMs: 300,
+        cryptoSignTimingMs: 0,
+        cryptoDeriveTimingMs: 0,
+        hotFunctionTimings: [],
+        jitPatternVariance: 0,
+        polymorphicCallTimingMs: 0,
+        rafLatencyVarianceMs: 0,
+        rafFrameBudgetRatio: 0,
+        headlessLikelihood: 100,
+        detectionSignals: [],
+      };
+      expect(scoreTimingOracle(data)).toBe(0);
+    });
+
+    it('applies penalty for perfNowNonMonotonic signal', () => {
+      // headlessLikelihood=0 so baseScore=100, penalty=15 -> 85
+      const data: TimingOracleData = {
+        performanceNowMonotonic: false,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [],
+        jitPatternVariance: 2,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 0,
+        detectionSignals: ['perfNowNonMonotonic'],
+      };
+      expect(scoreTimingOracle(data)).toBe(85);
+    });
+
+    it('applies penalty for cryptoTooFast signal', () => {
+      // headlessLikelihood=0 so baseScore=100, penalty=20 -> 80
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 0.1,
+        cryptoDeriveTimingMs: 0.1,
+        hotFunctionTimings: [],
+        jitPatternVariance: 2,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 0,
+        detectionSignals: ['cryptoTooFast'],
+      };
+      expect(scoreTimingOracle(data)).toBe(80);
+    });
+
+    it('applies penalty for jitLowVariance signal (strongest single penalty)', () => {
+      // headlessLikelihood=0 so baseScore=100, penalty=25 -> 75
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [10, 10, 10],
+        jitPatternVariance: 0.01,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 0,
+        detectionSignals: ['jitLowVariance'],
+      };
+      expect(scoreTimingOracle(data)).toBe(75);
+    });
+
+    it('combines multiple detection signal penalties', () => {
+      // headlessLikelihood=0, baseScore=100
+      // All 8 signals: 15+10+10+20+25+15+15+10 = 120 penalty
+      // 100 - 120 = -20, clamped to 0
+      const data: TimingOracleData = {
+        performanceNowMonotonic: false,
+        setTimeoutDriftMs: 200,
+        dateNowVsPerformanceNowDriftMs: 150,
+        cryptoSignTimingMs: 0.1,
+        cryptoDeriveTimingMs: 0.1,
+        hotFunctionTimings: [],
+        jitPatternVariance: 0,
+        polymorphicCallTimingMs: 0,
+        rafLatencyVarianceMs: 0,
+        rafFrameBudgetRatio: 0,
+        headlessLikelihood: 0,
+        detectionSignals: [
+          'perfNowNonMonotonic',
+          'setTimeoutDrift',
+          'datePerfDrift',
+          'cryptoTooFast',
+          'jitLowVariance',
+          'polymorphicTooFast',
+          'rafLowVariance',
+          'rafFrameBudgetLow',
+        ],
+      };
+      expect(scoreTimingOracle(data)).toBe(0);
+    });
+
+    it('clamps score to minimum of 0', () => {
+      // headlessLikelihood=90, baseScore=10, plus jitLowVariance penalty=25 -> -15 clamped to 0
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [],
+        jitPatternVariance: 0,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 90,
+        detectionSignals: ['jitLowVariance'],
+      };
+      expect(scoreTimingOracle(data)).toBe(0);
+    });
+
+    it('clamps score to maximum of 100', () => {
+      // headlessLikelihood=-10 (edge case), baseScore=110, clamped to 100
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [],
+        jitPatternVariance: 2,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: -10,
+        detectionSignals: [],
+      };
+      expect(scoreTimingOracle(data)).toBe(100);
+    });
+
+    it('ignores unknown detection signals', () => {
+      // headlessLikelihood=0, baseScore=100, unknown signal = no penalty -> 100
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [],
+        jitPatternVariance: 2,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 0,
+        detectionSignals: ['someUnknownSignal', 'anotherFakeOne'],
+      };
+      expect(scoreTimingOracle(data)).toBe(100);
+    });
+
+    it('handles empty detectionSignals array', () => {
+      const data: TimingOracleData = {
+        performanceNowMonotonic: true,
+        setTimeoutDriftMs: 0,
+        dateNowVsPerformanceNowDriftMs: 0,
+        cryptoSignTimingMs: 50,
+        cryptoDeriveTimingMs: 80,
+        hotFunctionTimings: [],
+        jitPatternVariance: 2,
+        polymorphicCallTimingMs: 30,
+        rafLatencyVarianceMs: 5,
+        rafFrameBudgetRatio: 0.9,
+        headlessLikelihood: 30,
+        detectionSignals: [],
+      };
+      // baseScore = 100 - 30 = 70, no penalties
+      expect(scoreTimingOracle(data)).toBe(70);
+    });
+  });
+
+  describe('scoreTremor', () => {
+    it('returns 50 (neutral) for null input', () => {
+      expect(scoreTremor(null)).toBe(50);
+    });
+
+    it('returns 50 (neutral) for undefined input', () => {
+      expect(scoreTremor(undefined)).toBe(50);
+    });
+
+    it('returns 50 when sampleCount is below minimum (<20)', () => {
+      // Too few samples for reliable analysis
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 10,
+        sampleCount: 19,
+      };
+      expect(scoreTremor(data)).toBe(50);
+    });
+
+    it('returns 50 when sampleCount is exactly 0', () => {
+      const data: TremorData = {
+        dominantFrequencyHz: 0,
+        tremorPowerRatio: 0,
+        spectralEntropy: 0,
+        peakToPeakJitter: 0,
+        sampleCount: 0,
+      };
+      expect(scoreTremor(data)).toBe(50);
+    });
+
+    it('returns 60 for a perfect human-like tremor signal', () => {
+      // Frequency in 4-12 Hz, power ratio >= 0.15, spectral entropy >= 0.35
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      // base=60, no penalties: frequency OK, power OK, entropy OK
+      expect(scoreTremor(data)).toBe(60);
+    });
+
+    it('penalizes frequency below human tremor range (<4 Hz)', () => {
+      // base=60, penalty -30 for wrong frequency band
+      const data: TremorData = {
+        dominantFrequencyHz: 2,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 50,
+      };
+      expect(scoreTremor(data)).toBe(30);
+    });
+
+    it('penalizes frequency above human tremor range (>12 Hz)', () => {
+      // base=60, penalty -30 for wrong frequency band
+      const data: TremorData = {
+        dominantFrequencyHz: 20,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 50,
+      };
+      expect(scoreTremor(data)).toBe(30);
+    });
+
+    it('penalizes frequency at exactly 0 Hz', () => {
+      // base=60, penalty -30 for wrong frequency
+      const data: TremorData = {
+        dominantFrequencyHz: 0,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(30);
+    });
+
+    it('penalizes very high frequency at boundary values', () => {
+      // base=60, -30 for frequency > 12 Hz
+      const data: TremorData = {
+        dominantFrequencyHz: 13,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(30);
+    });
+
+    it('accepts frequency at the lower boundary (4 Hz)', () => {
+      // 4 Hz is within 4-12 Hz range, no penalty
+      const data: TremorData = {
+        dominantFrequencyHz: 4,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(60);
+    });
+
+    it('accepts frequency at the upper boundary (12 Hz)', () => {
+      // 12 Hz is within 4-12 Hz range, no penalty
+      const data: TremorData = {
+        dominantFrequencyHz: 12,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(60);
+    });
+
+    it('penalizes low tremor power ratio (<0.15)', () => {
+      // base=60, penalty -25 for low power ratio
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 0.1,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(35);
+    });
+
+    it('penalizes low spectral entropy (<0.35) indicating deterministic signal', () => {
+      // base=60, penalty -20 for low entropy (bot-like deterministic pattern)
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.2,
+        peakToPeakJitter: 15,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(40);
+    });
+
+    it('combines all three penalties for worst-case bot signal', () => {
+      // base=60, -30 (freq) -25 (power) -20 (entropy) = -15, clamped to 0
+      const data: TremorData = {
+        dominantFrequencyHz: 1,
+        tremorPowerRatio: 0.05,
+        spectralEntropy: 0.1,
+        peakToPeakJitter: 0,
+        sampleCount: 100,
+      };
+      expect(scoreTremor(data)).toBe(0);
+    });
+
+    it('works with minimum valid sampleCount (20)', () => {
+      // Exactly at the threshold, should not return 50
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 0.5,
+        spectralEntropy: 0.6,
+        peakToPeakJitter: 10,
+        sampleCount: 20,
+      };
+      expect(scoreTremor(data)).toBe(60);
+    });
+
+    it('clamps result to maximum of 100', () => {
+      // Even with perfect inputs, max should be 60 base + no bonuses = 60
+      // But verify it's clamped
+      const data: TremorData = {
+        dominantFrequencyHz: 8,
+        tremorPowerRatio: 1.0,
+        spectralEntropy: 1.0,
+        peakToPeakJitter: 100,
+        sampleCount: 1000,
+      };
+      const result = scoreTremor(data);
+      expect(result).toBeLessThanOrEqual(100);
+      expect(result).toBeGreaterThanOrEqual(0);
     });
   });
 });

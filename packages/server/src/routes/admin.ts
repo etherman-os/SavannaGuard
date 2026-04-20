@@ -1,12 +1,75 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { db, getPowDifficulty, setPowDifficulty } from '../db.js';
+import {
+  db,
+  getPowDifficulty,
+  setPowDifficulty,
+  getBlockDatacenterIPs,
+  setBlockDatacenterIPs,
+  getAdaptivePowEnabled,
+  setAdaptivePowEnabled,
+} from '../db.js';
 import { adminLayout, loginPage, statsContent, flaggedContent, settingsContent, threatContent, federationContent, vpnContent, mobileContent, multiTenantContent } from '../admin-ui.js';
 import { getLearningStatus } from '../services/adaptive.js';
 import { getThreatStatus } from '../services/adaptivePow.js';
 import { getBotSignatureStats, cleanupOldSignatures } from '../services/botSignatures.js';
 import { getPassiveProtectionStats } from '../services/passiveProtection.js';
+import { checkAdminRateLimit } from '../services/rateLimit.js';
 import crypto from 'crypto';
 import { config } from '../config.js';
+
+// Brute-force protection for admin login
+const loginAttempts = new Map<string, { count: number; lockedUntil: number; lastAttempt: number }>();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+let loginCleanupInterval: ReturnType<typeof setInterval> | null = null;
+
+function ensureLoginAttemptsCleanupInterval(): void {
+  if (loginCleanupInterval) return;
+
+  loginCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of loginAttempts) {
+      // Purge locked entries whose lockout has expired
+      if (entry.lockedUntil && now >= entry.lockedUntil) {
+        loginAttempts.delete(ip);
+        continue;
+      }
+      // Purge non-locked entries that haven't been attempted recently
+      if (!entry.lockedUntil && entry.lastAttempt && (now - entry.lastAttempt > LOCKOUT_DURATION_MS)) {
+        loginAttempts.delete(ip);
+      }
+    }
+  }, 5 * 60 * 1000);
+
+  loginCleanupInterval.unref?.();
+}
+
+function checkLoginLockout(ip: string): { allowed: boolean; remainingMs: number } {
+  const entry = loginAttempts.get(ip);
+  if (!entry) return { allowed: true, remainingMs: 0 };
+  if (entry.lockedUntil && Date.now() < entry.lockedUntil) {
+    return { allowed: false, remainingMs: entry.lockedUntil - Date.now() };
+  }
+  if (entry.lockedUntil && Date.now() >= entry.lockedUntil) {
+    loginAttempts.delete(ip);
+    return { allowed: true, remainingMs: 0 };
+  }
+  return { allowed: true, remainingMs: 0 };
+}
+
+function recordFailedLogin(ip: string): void {
+  const entry = loginAttempts.get(ip) ?? { count: 0, lockedUntil: 0, lastAttempt: 0 };
+  entry.count++;
+  entry.lastAttempt = Date.now();
+  if (entry.count >= MAX_LOGIN_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
+  }
+  loginAttempts.set(ip, entry);
+}
+
+function resetLoginAttempts(ip: string): void {
+  loginAttempts.delete(ip);
+}
 
 const ADMIN_COOKIE_NAME = 'savanna_admin';
 
@@ -47,38 +110,110 @@ function readDifficultyFromBody(body: unknown): number | null {
   return null;
 }
 
+function readBlockDcFromBody(body: unknown): boolean | null {
+  if (!body || typeof body !== 'object') return null;
+  const val = (body as Record<string, unknown>).blockDatacenterIPs;
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') return val === 'true';
+  return null;
+}
+
+function readAdaptiveEnabledFromBody(body: unknown): boolean | null {
+  if (!body || typeof body !== 'object') return null;
+  const val = (body as Record<string, unknown>).adaptiveEnabled;
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') return val === 'true';
+  return null;
+}
+
 function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
-  if (verifyPassword(request.cookies[ADMIN_COOKIE_NAME])) return true;
+  if (verifyPassword(request.cookies[ADMIN_COOKIE_NAME])) {
+    const csrfCookie = request.cookies['savanna_csrf'];
+    if (!csrfCookie || typeof csrfCookie !== 'string' || csrfCookie.length < 32) {
+      setCsrfCookie(reply, generateCsrfToken());
+    }
+    return true;
+  }
   reply.status(401).type('text/html').send(loginPage());
   return false;
 }
 
+function generateCsrfToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function setCsrfCookie(rep: FastifyReply, token: string): void {
+  rep.setCookie('savanna_csrf', token, {
+    path: '/admin',
+    httpOnly: false, // Must be readable by JS
+    sameSite: 'strict',
+    secure: process.env.NODE_ENV === 'production',
+  });
+}
+
 function requireAdminCsrf(request: FastifyRequest, reply: FastifyReply): boolean {
   if (!requireAdmin(request, reply)) return false;
+  // Check custom header (existing)
   const header = request.headers['x-requested-with'] ?? '';
   if (typeof header !== 'string' || header !== 'SavannaAdmin') {
     reply.status(403).send({ error: 'Forbidden' });
+    return false;
+  }
+  // Double-submit cookie CSRF check (timing-safe comparison)
+  const cookieToken = request.cookies['savanna_csrf'];
+  const headerToken = typeof request.headers['x-csrf-token'] === 'string' ? request.headers['x-csrf-token'] : '';
+  if (!cookieToken || !headerToken || !safeEquals(cookieToken, headerToken)) {
+    reply.status(403).send({ error: 'Invalid CSRF token' });
+    return false;
+  }
+  return true;
+}
+
+function checkAdminRate(req: FastifyRequest, rep: FastifyReply): boolean {
+  const result = checkAdminRateLimit(req.ip ?? 'unknown');
+  if (!result.allowed) {
+    rep.status(429).send({ error: 'Too many requests', retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) });
     return false;
   }
   return true;
 }
 
 export function adminRoutes(app: FastifyInstance) {
+  ensureLoginAttemptsCleanupInterval();
+
   app.get('/admin/login', async (_req, rep) => {
     return rep.type('text/html').send(loginPage());
   });
 
   app.post('/admin/login', async (req, rep) => {
+    const ip = req.ip;
+
+    // Check brute-force lockout before processing password
+    const lockout = checkLoginLockout(ip);
+    if (!lockout.allowed) {
+      const retryAfter = Math.ceil(lockout.remainingMs / 1000);
+      return rep
+        .status(429)
+        .header('Retry-After', String(retryAfter))
+        .type('text/html')
+        .send(loginPage(`Too many failed attempts. Try again in ${Math.ceil(lockout.remainingMs / 60000)} minutes.`));
+    }
+
     const password = readPasswordFromBody(req.body);
     if (password && safeEquals(sha256(password), currentAdminCookieValue())) {
+      resetLoginAttempts(ip);
       rep.setCookie(ADMIN_COOKIE_NAME, currentAdminCookieValue(), {
         path: '/',
         httpOnly: true,
         sameSite: 'strict',
         secure: process.env.NODE_ENV === 'production',
       });
+      const csrfToken = generateCsrfToken();
+      setCsrfCookie(rep, csrfToken);
       return rep.redirect('/admin');
     }
+
+    recordFailedLogin(ip);
     return rep.type('text/html').send(loginPage('Invalid password'));
   });
 
@@ -129,6 +264,7 @@ export function adminRoutes(app: FastifyInstance) {
 
   app.get('/admin/api/stats', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const since = Date.now() - 24 * 60 * 60 * 1000;
     const total = (db.prepare('SELECT COUNT(*) as c FROM sessions WHERE created_at >= ?').get(since) as { c: number }).c;
@@ -155,6 +291,7 @@ export function adminRoutes(app: FastifyInstance) {
 
   app.get('/admin/api/stats/timeseries', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const now = Date.now();
     const since = now - 24 * 60 * 60 * 1000;
@@ -207,22 +344,26 @@ export function adminRoutes(app: FastifyInstance) {
 
   app.get('/admin/api/threat', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     return getThreatStatus();
   });
 
   app.get('/admin/api/learning', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     return getLearningStatus();
   });
 
   app.get('/admin/api/signatures', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     cleanupOldSignatures();
     return getBotSignatureStats();
   });
 
   app.get('/admin/api/flagged', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     const rows = db.prepare("SELECT id, created_at, verdict, final_score, ip_hash FROM sessions WHERE verdict IN ('bot','suspicious') ORDER BY created_at DESC LIMIT 100").all() as {
       id: string;
       created_at: number;
@@ -241,11 +382,17 @@ export function adminRoutes(app: FastifyInstance) {
 
   app.get('/admin/api/settings', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
-    return { difficulty: getPowDifficulty() };
+    if (!checkAdminRate(req, rep)) return;
+    return {
+      difficulty: getPowDifficulty(),
+      adaptiveEnabled: getAdaptivePowEnabled(),
+      blockDatacenterIPs: getBlockDatacenterIPs(),
+    };
   });
 
-  app.post('/admin/settings', async (req, rep) => {
+  const handleSettingsUpdate = async (req: FastifyRequest, rep: FastifyReply) => {
     if (!requireAdminCsrf(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
 
     const requestedDifficulty = readDifficultyFromBody(req.body);
     if (requestedDifficulty === null) {
@@ -253,11 +400,35 @@ export function adminRoutes(app: FastifyInstance) {
     }
 
     const savedDifficulty = setPowDifficulty(requestedDifficulty);
-    return { ok: true, difficulty: savedDifficulty };
-  });
+
+    const adaptiveEnabled = readAdaptiveEnabledFromBody(req.body);
+    if (adaptiveEnabled !== null) {
+      setAdaptivePowEnabled(adaptiveEnabled);
+    }
+
+    // Also persist blockDatacenterIPs if provided
+    const blockDc = readBlockDcFromBody(req.body);
+    if (blockDc !== null) {
+      setBlockDatacenterIPs(blockDc);
+    }
+
+    return {
+      ok: true,
+      difficulty: savedDifficulty,
+      adaptiveEnabled: getAdaptivePowEnabled(),
+      blockDatacenterIPs: getBlockDatacenterIPs(),
+    };
+  };
+
+  // UI form endpoint
+  app.post('/admin/settings', handleSettingsUpdate);
+  // JSON API endpoint documented in README
+  app.post('/admin/api/settings', handleSettingsUpdate);
 
   app.get('/admin/api/passive-protection', async (req, rep) => {
     if (!requireAdmin(req, rep)) return;
+    if (!checkAdminRate(req, rep)) return;
     return getPassiveProtectionStats();
   });
+
 }

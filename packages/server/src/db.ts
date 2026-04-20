@@ -3,8 +3,8 @@ import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { config } from './config.js';
 
-const MIN_POW_DIFFICULTY = 3;
-const MAX_POW_DIFFICULTY = 6;
+export const MIN_POW_DIFFICULTY = 3;
+export const MAX_POW_DIFFICULTY = 6;
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -36,6 +36,9 @@ db.exec(`
     screen_score REAL DEFAULT 0,
     navigator_score REAL DEFAULT 0,
     network_score REAL DEFAULT 0,
+    timing_oracle_score REAL DEFAULT 0,
+    tremor_score REAL DEFAULT 0,
+    webrtc_oracle_score REAL DEFAULT 0,
     final_score REAL DEFAULT 0,
     verdict TEXT DEFAULT 'pending',
     verdict_token TEXT
@@ -116,6 +119,7 @@ db.exec(`
 `);
 
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('pow_difficulty', '4')").run();
+db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('adaptive_pow_enabled', 'true')").run();
 
 function safeAddColumn(table: string, column: string, type: string, defaultValue: string): void {
   try {
@@ -132,6 +136,66 @@ safeAddColumn('federation_peers', 'consecutive_failures', 'INTEGER', '0');
 safeAddColumn('federation_peers', 'last_failure_at', 'INTEGER', '0');
 safeAddColumn('federation_peers', 'last_failure_reason', 'TEXT', "''");
 safeAddColumn('federation_peers', 'last_success_at', 'INTEGER', '0');
+
+function normalizePeerUrlForStorage(peerUrl: string): string {
+  const trimmed = peerUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    const normalizedPath = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+function dedupeFederationPeersByUrl(): void {
+  const rows = db.prepare(
+    `SELECT peer_id, peer_url, last_seen, last_success_at
+     FROM federation_peers
+     ORDER BY last_success_at DESC, last_seen DESC, rowid DESC`
+  ).all() as Array<{ peer_id: string; peer_url: string; last_seen: number; last_success_at: number }>;
+
+  const seenUrls = new Set<string>();
+  const duplicatePeerIds: string[] = [];
+
+  const updateUrl = db.prepare('UPDATE federation_peers SET peer_url = ? WHERE peer_id = ?');
+
+  for (const row of rows) {
+    const normalizedUrl = normalizePeerUrlForStorage(row.peer_url);
+
+    if (row.peer_url !== normalizedUrl) {
+      updateUrl.run(normalizedUrl, row.peer_id);
+    }
+
+    if (seenUrls.has(normalizedUrl)) {
+      duplicatePeerIds.push(row.peer_id);
+      continue;
+    }
+
+    seenUrls.add(normalizedUrl);
+  }
+
+  if (duplicatePeerIds.length === 0) return;
+
+  const removeDuplicates = db.transaction((peerIds: string[]) => {
+    const deletePeer = db.prepare('DELETE FROM federation_peers WHERE peer_id = ?');
+    const deleteSyncState = db.prepare('DELETE FROM federation_sync_state WHERE peer_id = ?');
+    for (const peerId of peerIds) {
+      deletePeer.run(peerId);
+      deleteSyncState.run(peerId);
+    }
+  });
+
+  removeDuplicates(duplicatePeerIds);
+}
+
+dedupeFederationPeersByUrl();
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_peers_peer_url ON federation_peers(peer_url)');
+
+// Migration: add timing_oracle, tremor, and webrtc_oracle score columns
+safeAddColumn('sessions', 'timing_oracle_score', 'REAL', '0');
+safeAddColumn('sessions', 'tremor_score', 'REAL', '0');
+safeAddColumn('sessions', 'webrtc_oracle_score', 'REAL', '0');
 
 export interface DbChallenge {
   id: string;
@@ -153,6 +217,9 @@ export interface DbSession {
   screen_score: number;
   navigator_score: number;
   network_score: number;
+  timing_oracle_score: number;
+  tremor_score: number;
+  webrtc_oracle_score: number;
   final_score: number;
   verdict: string;
   verdict_token: string | null;
@@ -175,6 +242,36 @@ export function setPowDifficulty(nextDifficulty: number): number {
   const clamped = clampDifficulty(nextDifficulty);
   db.prepare("UPDATE settings SET value = ? WHERE key = 'pow_difficulty'").run(String(clamped));
   return clamped;
+}
+
+export function getAdaptivePowEnabled(): boolean {
+  const row = db.prepare("SELECT value FROM settings WHERE key='adaptive_pow_enabled'").get() as { value: string } | undefined;
+  if (!row) return true;
+  return row.value !== 'false';
+}
+
+export function setAdaptivePowEnabled(enabled: boolean): void {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('adaptive_pow_enabled', ?)").run(enabled ? 'true' : 'false');
+}
+
+// Read blockDatacenterIPs from settings table; falls back to env config
+export function getBlockDatacenterIPs(): boolean {
+  const row = db.prepare("SELECT value FROM settings WHERE key='blockDatacenterIPs'").get() as { value: string } | undefined;
+  if (!row) return config.passiveProtection.blockDatacenterIPs;
+  return row.value === 'true';
+}
+
+export function setBlockDatacenterIPs(enabled: boolean): void {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('blockDatacenterIPs', ?)").run(enabled ? 'true' : 'false');
+}
+
+export function isDbHealthy(): boolean {
+  try {
+    db.prepare('SELECT 1').get();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function cleanupExpiredRows(now = Date.now()): void {

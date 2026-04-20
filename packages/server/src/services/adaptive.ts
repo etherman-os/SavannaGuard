@@ -1,4 +1,5 @@
 import { db } from '../db.js';
+import { config } from '../config.js';
 
 interface SignalStats {
   mean: number;
@@ -47,7 +48,7 @@ function getSignalStats(signal: SignalName): SignalStats {
     'SELECT mean_value, count, stddev FROM site_signals WHERE signal_key = ?'
   ).get(signal) as { mean_value: number; count: number; stddev: number } | undefined;
 
-  if (!row || row.count < 10) {
+  if (!row || row.count < config.adaptive.minSamples) {
     return { mean: 50, count: 0, variance: 400 };
   }
 
@@ -85,7 +86,7 @@ function updateSignalStats(signal: SignalName, value: number): void {
 }
 
 function gaussianProbability(value: number, stats: SignalStats): number {
-  if (stats.count < 10) return 0.5;
+  if (stats.count < config.adaptive.minSamples) return 0.5;
 
   const diff = value - stats.mean;
   const exponent = -(diff * diff) / (2 * stats.variance);
@@ -117,7 +118,7 @@ export function adaptScores(scores: ScoreInput): AdaptiveResult {
     if (value === undefined) continue;
     const stats = getSignalStats(signal);
 
-    if (stats.count >= 10) {
+    if (stats.count >= config.adaptive.minSamples) {
       const prob = gaussianProbability(value, stats);
       const weight = stats.count / 100;
 

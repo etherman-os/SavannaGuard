@@ -68,6 +68,7 @@ export async function solveChallenge(
       language: behavioral.language,
       timezone: behavioral.timezone,
       timezoneOffset: behavioral.timezoneOffset,
+      cookiesEnabled: behavioral.cookiesEnabled,
       hardwareConcurrency: behavioral.hardwareConcurrency,
       maxTouchPoints: behavioral.maxTouchPoints,
     },

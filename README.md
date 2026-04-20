@@ -11,7 +11,7 @@ By combining **Adaptive Proof-of-Work** that auto-adjusts to attack volume, **Pe
 ## Key Features
 
 ### Adaptive Proof-of-Work
-Automatically adjusts difficulty based on detected bot ratio. Under attack → harder puzzles. Quiet periods → minimal friction.
+Automatically adjusts difficulty (3-6) based on detected bot ratio. Under attack → harder puzzles. Quiet periods → minimal friction.
 
 ### Per-Site ML Learning
 Online Gaussian model learns your legitimate users' behavior patterns after just 10+ human samples. Adapts to your traffic, not generic models.
@@ -85,11 +85,12 @@ pnpm --filter @savannaguard/server start
 | `SECRET_KEY` | ✅ Yes | — | Token encryption key. Generate with `openssl rand -hex 32`. |
 | `ADMIN_PASSWORD` | No | `admin` | Admin dashboard login password. |
 | `PORT` | No | `3000` | HTTP server port. |
+| `HOST` | No | `0.0.0.0` | Host interface to bind (use `0.0.0.0` in Docker). |
 | `DB_PATH` | No | `./data/savannaguard.db` | SQLite database path. Use `/data/` prefix in Docker. |
 | `LOG_LEVEL` | No | `info` | Logging verbosity: `debug`, `info`, `warn`, `error`. |
 | `FEDERATION_ENABLED` | No | `false` | Enable P2P federation for sharing bot signatures. |
 | `FEDERATION_PEERS` | No | — | Comma-separated peer URLs (e.g. `https://sg1.example.com,https://sg2.example.com`). |
-| `FEDERATION_PSK` | No | — | Pre-shared key for peer authentication. Required if federation is enabled. |
+| `FEDERATION_PSK` | No | — | Pre-shared key for peer authentication. Required if federation is enabled (recommended: `openssl rand -hex 32`). |
 | `FEDERATION_SYNC_INTERVAL` | No | `300000` | Active peer sync interval in ms (5 min). |
 | `FEDERATION_OFFLINE_SYNC_INTERVAL` | No | `1800000` | Offline peer recovery interval in ms (30 min). |
 | `FEDERATION_OFFLINE_THRESHOLD` | No | `3` | Consecutive failures before marking peer offline. |
@@ -98,6 +99,12 @@ pnpm --filter @savannaguard/server start
 | `FEDERATION_MAX_RETRIES` | No | `3` | Max retry attempts for failed peer requests. |
 | `FEDERATION_BASE_RETRY_DELAY_MS` | No | `5000` | Base delay between retries in ms. |
 | `FEDERATION_MAX_RETRY_DELAY_MS` | No | `60000` | Maximum delay between retries in ms. |
+| `FEDERATION_ALLOW_PRIVATE_PEERS` | No | `false` | Allow private/internal peer URLs (for Docker/VPN deployments). |
+| `ADAPTIVE_MIN_SAMPLES` | No | `10` | Minimum human samples before adaptive model affects scoring. |
+| `PASSIVE_PROTECTION_ENABLED` | No | `true` | Enable passive protection checks. |
+| `PASSIVE_PROTECTION_BLOCK_DC` | No | `false` | Block known datacenter IPs at challenge creation/solve. |
+| `PASSIVE_PROTECTION_DC_RATE_LIMIT` | No | `3` | Per-minute limit for datacenter IPs when not blocked. |
+| `PASSIVE_PROTECTION_CUSTOM_RANGES` | No | — | Extra CIDR ranges to classify as datacenter/blocked candidates. |
 
 ### Health Check
 
@@ -134,6 +141,16 @@ To run only server tests:
 pnpm --filter @savannaguard/server test
 ```
 
+To run Docker federation integration tests:
+
+```bash
+docker compose -f docker-compose.test.yml up -d --build
+RUN_DOCKER_TESTS=1 NODE_A_URL=http://localhost:3001 NODE_B_URL=http://localhost:3002 NODE_A_PEER_URL=http://node-a:3000 NODE_B_PEER_URL=http://node-b:3000 FEDERATION_PSK=test-psk-key-for-federation-testing ADMIN_PASSWORD=admin SYNC_WAIT_MS=5000 pnpm --filter @savannaguard/server test -- --testNamePattern="federation-docker"
+docker compose -f docker-compose.test.yml down --remove-orphans
+```
+
+If your environment does not have the Compose plugin, use `docker-compose` instead of `docker compose`.
+
 ## Form Integration
 
 ```html
@@ -166,8 +183,10 @@ document.getElementById('my-form').addEventListener('submit', async (e) => {
 ## Architecture
 
 - **Server**: Fastify + SQLite — handles PoW challenges, token generation, session scoring
-- **Widget**: Vanilla TS via Vite — Web Worker PoW solver, behavioral collectors (6.6kb gzip)
+- **Widget**: Vanilla TS via Vite — Web Worker PoW solver, behavioral collectors (~6.6kb gzip)
 - **Admin**: Alpine.js UI served by server — stats, flagged sessions, settings
+
+Widget size note: there is no hard CI rule that enforces `gzip < 6kb`; size is treated as a performance target and tracked for regressions.
 
 ## The Science Behind Detection
 
@@ -224,6 +243,8 @@ We invite security researchers to attempt bypass. Open an issue with your approa
 | POST | /admin/api/federation/peers | Add federation peer |
 | DELETE | /admin/api/federation/peers/:peerId | Remove federation peer |
 | POST | /admin/api/federation/sync | Trigger federation sync |
+| GET | /admin/api/federation/psk | Get masked federation PSK info |
+| POST | /admin/api/federation/rotate-psk | Rotate federation PSK |
 | GET | /admin/api/federation/stats | Federation statistics |
 
 ### Federation (P2P, authenticated via HMAC)
@@ -231,9 +252,9 @@ We invite security researchers to attempt bypass. Open an issue with your approa
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /federation/state | Get bot signature state |
-| POST | /federation/state | Receive signature state (pull response) |
-| POST | /federation/push | Push new signatures to peer |
-| POST | /federation/sync | Pull signatures from peer |
+| POST | /federation/state | Serve signature state to authenticated peer pull |
+| POST | /federation/push | Compatibility alias for `/federation/state` |
+| POST | /federation/sync | Receive pushed signatures from authenticated peer |
 
 ## Comparison
 

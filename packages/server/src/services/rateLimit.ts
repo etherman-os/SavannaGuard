@@ -52,6 +52,48 @@ export function checkRateLimit(ipHash: string): RateLimitResult {
   };
 }
 
+// Separate map for admin API rate limiting (keyed by raw IP with 'admin:' prefix)
+const adminRateLimitMap = new Map<string, RateLimitEntry>();
+
+export function checkAdminRateLimit(clientIp: string): RateLimitResult {
+  const maxRequests = 30;
+  const windowMs = 60 * 1000;
+  const key = `admin:${clientIp}`;
+  const now = Date.now();
+
+  const entry = adminRateLimitMap.get(key);
+
+  // No entry or window expired - create new entry
+  if (!entry || now > entry.resetAt) {
+    adminRateLimitMap.set(key, {
+      count: 1,
+      resetAt: now + windowMs,
+    });
+    return {
+      allowed: true,
+      remaining: maxRequests - 1,
+      resetAt: now + windowMs,
+    };
+  }
+
+  // Window active - check count
+  if (entry.count >= maxRequests) {
+    return {
+      allowed: false,
+      remaining: 0,
+      resetAt: entry.resetAt,
+    };
+  }
+
+  // Increment count
+  entry.count++;
+  return {
+    allowed: true,
+    remaining: maxRequests - entry.count,
+    resetAt: entry.resetAt,
+  };
+}
+
 export function cleanupExpiredRateLimitEntries(): void {
   const now = Date.now();
   for (const [key, entry] of rateLimitMap.entries()) {
@@ -59,4 +101,14 @@ export function cleanupExpiredRateLimitEntries(): void {
       rateLimitMap.delete(key);
     }
   }
+  for (const [key, entry] of adminRateLimitMap.entries()) {
+    if (now > entry.resetAt) {
+      adminRateLimitMap.delete(key);
+    }
+  }
+}
+
+export function resetRateLimitState(): void {
+  rateLimitMap.clear();
+  adminRateLimitMap.clear();
 }

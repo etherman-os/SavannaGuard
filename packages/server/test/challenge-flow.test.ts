@@ -60,7 +60,7 @@ function makeBehavioralPayload() {
     canvasData: { canvasHash: 'abc12345', isCanvasSupported: true },
     webglData: { renderer: 'Test GPU', vendor: 'Test Vendor', hasWebGL: true },
     screenData: { width: 1920, height: 1080, colorDepth: 24, pixelRatio: 1 },
-    navigatorData: { userAgent: 'TestAgent', platform: 'TestPlatform', language: 'en', timezone: 'UTC', timezoneOffset: 0, hardwareConcurrency: 4, maxTouchPoints: 0 },
+    navigatorData: { userAgent: 'TestAgent', platform: 'TestPlatform', language: 'en', timezone: 'UTC', timezoneOffset: 0, cookiesEnabled: true, hardwareConcurrency: 4, maxTouchPoints: 0 },
     networkData: { latencyMs: 50, effectiveType: '4g', downlink: 10 },
   };
 }
@@ -371,5 +371,66 @@ describe('challenge flow', () => {
     expect(solveResponse.statusCode).toBe(200);
     const solved = solveResponse.json() as ChallengeSolveResponse;
     expect(solved.success).toBe(true);
+  });
+
+  it('rejects non-uuid challenge ids early', async () => {
+    const solveResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/challenge/solve',
+      payload: {
+        challengeId: 'not-a-uuid',
+        sessionId: '11111111-1111-1111-1111-111111111111',
+        solution: '0',
+      },
+    });
+
+    expect(solveResponse.statusCode).toBe(400);
+    expect(solveResponse.json()).toEqual({ error: 'Invalid challenge ID format' });
+  });
+
+  it('rejects malformed solution format early', async () => {
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/challenge/create',
+      payload: {},
+    });
+    expect(createResponse.statusCode).toBe(200);
+    const created = createResponse.json() as ChallengeCreateResponse;
+
+    const solveResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/challenge/solve',
+      payload: {
+        challengeId: created.challengeId,
+        sessionId: created.sessionId,
+        solution: 'not-hex',
+      },
+    });
+
+    expect(solveResponse.statusCode).toBe(400);
+    expect(solveResponse.json()).toEqual({ error: 'Invalid solution format' });
+  });
+
+  it('rejects overlong solution payloads', async () => {
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/challenge/create',
+      payload: {},
+    });
+    expect(createResponse.statusCode).toBe(200);
+    const created = createResponse.json() as ChallengeCreateResponse;
+
+    const solveResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/challenge/solve',
+      payload: {
+        challengeId: created.challengeId,
+        sessionId: created.sessionId,
+        solution: 'f'.repeat(257),
+      },
+    });
+
+    expect(solveResponse.statusCode).toBe(400);
+    expect(solveResponse.json()).toEqual({ error: 'Invalid solution format' });
   });
 });

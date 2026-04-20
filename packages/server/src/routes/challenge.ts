@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { createChallenge, verifyPow } from '../services/pow.js';
+import { createChallenge, isValidChallengeId, validateSolutionFormat, verifyPow } from '../services/pow.js';
 import { signToken } from '../services/token.js';
-import { cleanupExpiredRows, db } from '../db.js';
+import { cleanupExpiredRows, db, MIN_POW_DIFFICULTY, MAX_POW_DIFFICULTY } from '../db.js';
 import { checkRateLimit } from '../services/rateLimit.js';
 import { calculateAllScores, calculateOverallScore, getVerdict } from '../services/scoring.js';
 import { adaptScores, learnFromSession } from '../services/adaptive.js';
@@ -60,6 +60,7 @@ interface NavigatorDataInput {
   language?: string;
   timezone?: string;
   timezoneOffset?: number;
+  cookiesEnabled?: boolean;
   hardwareConcurrency?: number;
   maxTouchPoints?: number;
 }
@@ -216,6 +217,16 @@ export function challengeRoutes(app: FastifyInstance) {
 
     const { challengeId, solution, sessionId } = rawBody as { challengeId: string; solution: string; sessionId: string };
 
+    // Input validation: challenge ID must be a valid UUID v4
+    if (!isValidChallengeId(challengeId)) {
+      return rep.status(400).send({ error: 'Invalid challenge ID format' });
+    }
+
+    // Input validation: solution must be non-empty, hex, and reasonably sized
+    if (!validateSolutionFormat(solution)) {
+      return rep.status(400).send({ error: 'Invalid solution format' });
+    }
+
     let body: SolveRequestBody;
 
     if (typeof rawBody.d === 'string' && rawBody.d.length > 0) {
@@ -242,6 +253,17 @@ export function challengeRoutes(app: FastifyInstance) {
     if (!challengeRow) return rep.status(404).send({ error: 'Challenge not found' });
     if (challengeRow.session_id !== sessionId) return rep.status(400).send({ error: 'Session mismatch' });
     if (Date.now() > challengeRow.expires_at) return rep.status(410).send({ error: 'Challenge expired' });
+
+    // Validate that the stored difficulty is within allowed bounds
+    if (challengeRow.difficulty < MIN_POW_DIFFICULTY || challengeRow.difficulty > MAX_POW_DIFFICULTY) {
+      return rep.status(500).send({ error: 'Invalid challenge difficulty' });
+    }
+
+    // Atomically reserve the challenge to avoid concurrent double-solve race
+    const challengeConsumed = db.prepare('DELETE FROM challenges WHERE id = ?').run(challengeId);
+    if (challengeConsumed.changes === 0) {
+      return rep.status(409).send({ error: 'Challenge already solved' });
+    }
 
     const sessionRow = db.prepare('SELECT id, ip_hash, user_agent FROM sessions WHERE id = ?').get(sessionId) as {
       id: string;
@@ -317,17 +339,16 @@ export function challengeRoutes(app: FastifyInstance) {
     finalScore = Math.max(0, Math.min(100, finalScore));
     const verdict = getVerdict(finalScore);
 
-    db.prepare('DELETE FROM challenges WHERE id = ?').run(challengeId);
-
     const verdictToken = powValid ? signToken(sessionId, finalScore, verdict) : null;
 
-    db.prepare(
+    const updateResult = db.prepare(
       `UPDATE sessions SET
         mouse_score = ?, keyboard_score = ?, timing_score = ?,
         pow_score = ?, canvas_score = ?, webgl_score = ?,
         screen_score = ?, navigator_score = ?, network_score = ?,
+        timing_oracle_score = ?, tremor_score = ?, webrtc_oracle_score = ?,
         final_score = ?, verdict = ?, verdict_token = ?
-       WHERE id = ?`
+       WHERE id = ? AND verdict = 'pending'`
     ).run(
       signalScores.mouseScore,
       signalScores.keyboardScore,
@@ -338,11 +359,18 @@ export function challengeRoutes(app: FastifyInstance) {
       signalScores.screenScore,
       signalScores.navigatorScore,
       signalScores.networkScore,
+      signalScores.timingOracleScore,
+      signalScores.tremorScore,
+      signalScores.webrtcOracleScore,
       finalScore,
       verdict,
       verdictToken,
       sessionId
     );
+
+    if (updateResult.changes === 0) {
+      return rep.status(409).send({ error: 'Challenge already solved' });
+    }
 
     // 5. Learn from human sessions (online learning)
     if (verdict === 'human') {

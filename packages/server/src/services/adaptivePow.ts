@@ -1,4 +1,4 @@
-import { db, setPowDifficulty, getPowDifficulty } from '../db.js';
+import { db, setPowDifficulty, getPowDifficulty, getAdaptivePowEnabled } from '../db.js';
 
 interface ThreatSnapshot {
   botRatio: number;
@@ -23,6 +23,10 @@ function getRecentThreatSnapshot(): ThreatSnapshot {
 export function adaptPowDifficulty(): { difficulty: number; reason: string; threat: ThreatSnapshot } {
   const snapshot = getRecentThreatSnapshot();
   const current = getPowDifficulty();
+
+  if (!getAdaptivePowEnabled()) {
+    return { difficulty: current, reason: 'Adaptive PoW disabled', threat: snapshot };
+  }
 
   if (snapshot.totalSessions < 10) {
     return { difficulty: current, reason: 'Not enough data', threat: snapshot };
@@ -51,12 +55,13 @@ export function adaptPowDifficulty(): { difficulty: number; reason: string; thre
   return { difficulty: target, reason, threat: snapshot };
 }
 
-export function getThreatStatus(): { botRatio: number; difficulty: number; totalSessions: number; botCount: number } {
+export function getThreatStatus(): { botRatio: number; difficulty: number; totalSessions: number; botCount: number; adaptiveEnabled: boolean } {
   const snapshot = getRecentThreatSnapshot();
   return {
     botRatio: Math.round(snapshot.botRatio * 100),
     difficulty: getPowDifficulty(),
     totalSessions: snapshot.totalSessions,
     botCount: snapshot.botCount,
+    adaptiveEnabled: getAdaptivePowEnabled(),
   };
 }

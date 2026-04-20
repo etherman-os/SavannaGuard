@@ -20,6 +20,12 @@ export function adminLayout(title: string, content: string, activeTab: AdminTab)
   <style>
     .chart-container { position: relative; width: 100%; }
   </style>
+  <script>
+    function getCsrfToken() {
+      var match = document.cookie.match(/(?:^|;\s*)savanna_csrf=([^;]*)/);
+      return match ? decodeURIComponent(match[1]) : '';
+    }
+  </script>
 </head>
 <body class="bg-gray-100 font-sans">
   <nav class="bg-gray-800 text-white p-4">
@@ -49,6 +55,7 @@ export function adminLayout(title: string, content: string, activeTab: AdminTab)
 }
 
 export function loginPage(error = ''): string {
+  const escapedError = error.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Login</title>
@@ -57,7 +64,7 @@ export function loginPage(error = ''): string {
 <body class="bg-gray-100 flex items-center justify-center h-screen">
   <form method="POST" action="/admin/login" class="bg-white p-8 rounded shadow">
     <h2 class="text-xl mb-4">Admin Login</h2>
-    ${error ? `<p class="text-red-500 mb-4">${error}</p>` : ''}
+    ${escapedError ? `<p class="text-red-500 mb-4">${escapedError}</p>` : ''}
     <input type="password" name="password" placeholder="Password" class="border p-2 w-full mb-4">
     <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded w-full">Login</button>
   </form>
@@ -186,22 +193,6 @@ loading: true,
         this.ppThrottled = pp.dcThrottledLast24h;
         this.ppRanges = pp.datacenterRangesCount;
         this.ppLimit = pp.datacenterRateLimitMax;
-      } catch (e) {
-        console.error('Failed to load stats:', e);
-      } finally {
-        this.loading = false;
-      }
-    },
-
-    async loadData() {
-      try {
-        const [ts, stats] = await Promise.all([
-          fetch('/admin/api/stats/timeseries').then(r => r.json()),
-          fetch('/admin/api/stats').then(r => r.json()),
-        ]);
-        this.hourly = ts.hourly || [];
-        this.verdicts = ts.verdicts || { human: 0, bot: 0, suspicious: 0 };
-        Object.assign(this.$data, stats);
       } catch (e) {
         console.error('Failed to load stats:', e);
       } finally {
@@ -495,18 +486,32 @@ export function flaggedContent(): string {
 }
 
 export function settingsContent(): string {
-  return `<div x-data="{ difficulty: 4, adaptiveEnabled: true, saving: false, saved: false }" x-init="fetch('/admin/api/settings').then(r=>r.json()).then(d=>{difficulty=d.difficulty ?? 4; adaptiveEnabled=d.adaptiveEnabled ?? true})">
-  <form @submit.prevent="saving=true; saved=false; fetch('/admin/settings', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin'}, body: JSON.stringify({difficulty, adaptiveEnabled})}).then(r=>r.json()).then(d=>{difficulty=d.difficulty; saved=true;}).finally(()=>saving=false)" class="bg-white p-6 rounded shadow max-w-md">
+  return `<div x-data="{ difficulty: 4, adaptiveEnabled: true, blockDatacenterIPs: false, saving: false, saved: false }" x-init="fetch('/admin/api/settings').then(r=>r.json()).then(d=>{difficulty=d.difficulty ?? 4; adaptiveEnabled=d.adaptiveEnabled ?? true; blockDatacenterIPs=d.blockDatacenterIPs ?? false})">
+  <form @submit.prevent="saving=true; saved=false; fetch('/admin/api/settings', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin','X-CSRF-Token':getCsrfToken()}, body: JSON.stringify({difficulty, adaptiveEnabled, blockDatacenterIPs})}).then(r=>r.json()).then(d=>{difficulty=d.difficulty; adaptiveEnabled=d.adaptiveEnabled ?? adaptiveEnabled; blockDatacenterIPs=d.blockDatacenterIPs; saved=true;}).finally(()=>saving=false)" class="bg-white p-6 rounded shadow max-w-md">
     <h3 class="text-lg font-bold mb-4">Settings</h3>
     <label class="block mb-4">
-      <span class="text-gray-700">PoW Difficulty (1-6)</span>
-      <input type="number" x-model="difficulty" min="1" max="6" class="border p-2 w-full mt-1">
+      <span class="text-gray-700">PoW Difficulty (3-6)</span>
+      <input type="number" x-model="difficulty" min="3" max="6" class="border p-2 w-full mt-1">
       <p class="text-xs text-gray-400 mt-1">Auto-adjusted by Adaptive PoW when enabled</p>
     </label>
     <label class="flex items-center gap-2 mb-4">
       <input type="checkbox" x-model="adaptiveEnabled" class="rounded">
       <span class="text-gray-700">Adaptive PoW (auto-adjust difficulty)</span>
     </label>
+    <div class="border-t pt-4 mt-2 mb-4">
+      <h4 class="text-sm font-bold text-gray-700 mb-2">Passive Protection</h4>
+      <label class="flex items-center gap-3 cursor-pointer">
+        <div class="relative">
+          <input type="checkbox" x-model="blockDatacenterIPs" class="sr-only">
+          <div class="w-10 h-5 bg-gray-300 rounded-full shadow" :class="blockDatacenterIPs && 'bg-green-500'"></div>
+          <div class="absolute left-0 top-0 w-5 h-5 bg-white rounded-full shadow transform transition-transform" :class="blockDatacenterIPs && 'translate-x-5'"></div>
+        </div>
+        <div>
+          <span class="text-gray-700 text-sm font-medium">Block Datacenter IPs</span>
+          <p class="text-xs text-gray-400">Reject requests from known datacenter/hosting IP ranges</p>
+        </div>
+      </label>
+    </div>
     <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded" :disabled="saving">
       <span x-text="saving ? 'Saving...' : 'Save'"></span>
     </button>
@@ -549,7 +554,7 @@ export function federationContent(): string {
     <div class="bg-white p-4 rounded shadow">
       <h3 class="text-lg font-bold mb-4">Trusted Peers</h3>
 
-      <form @submit.prevent="addingPeer=true; fetch('/admin/api/federation/peers', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin'}, body: JSON.stringify({peerUrl: newPeerUrl, psk: newPeerPsk})}).then(r=>r.json()).then(()=>{newPeerUrl=''; newPeerPsk=''; refresh()}).finally(()=>addingPeer=false)" class="mb-4">
+      <form @submit.prevent="addingPeer=true; fetch('/admin/api/federation/peers', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin','X-CSRF-Token':getCsrfToken()}, body: JSON.stringify({peerUrl: newPeerUrl, psk: newPeerPsk})}).then(r=>r.json()).then(()=>{newPeerUrl=''; newPeerPsk=''; refresh()}).finally(()=>addingPeer=false)" class="mb-4">
         <div class="flex gap-2">
           <input type="url" x-model="newPeerUrl" placeholder="https://peer.example.com" class="border p-2 flex-1" required>
           <input type="password" x-model="newPeerPsk" placeholder="PSK" class="border p-2 w-32" required>
@@ -581,7 +586,7 @@ export function federationContent(): string {
               </td>
               <td class="py-2 text-gray-500" x-text="peer.lastSeen ? new Date(peer.lastSeen).toLocaleString() : 'Never'"></td>
               <td class="py-2">
-                <button @click="fetch('/admin/api/federation/peers/' + peer.peerId, {method:'DELETE', headers:{'X-Requested-With':'SavannaAdmin'}}).then(()=>refresh())" class="text-red-600 hover:text-red-800">Remove</button>
+                <button @click="fetch('/admin/api/federation/peers/' + peer.peerId, {method:'DELETE', headers:{'X-Requested-With':'SavannaAdmin','X-CSRF-Token':getCsrfToken()}}).then(()=>refresh())" class="text-red-600 hover:text-red-800">Remove</button>
               </td>
             </tr>
           </template>
@@ -589,38 +594,66 @@ export function federationContent(): string {
       </table>
     </div>
 
-    <div class="bg-white p-4 rounded shadow">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-bold">Top Federated Signatures</h3>
-        <button @click="syncing=true; fetch('/admin/api/federation/sync', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin'}, body: JSON.stringify({peerUrl: ''})}).finally(()=>{syncing=false; refresh()})" class="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded">
-          <span x-text="syncing ? 'Syncing...' : 'Sync All'"></span>
-        </button>
+    <div>
+      <div class="bg-white p-4 rounded shadow mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">Top Federated Signatures</h3>
+          <button @click="syncing=true; fetch('/admin/api/federation/sync', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'SavannaAdmin','X-CSRF-Token':getCsrfToken()}, body: JSON.stringify({peerUrl: ''})}).finally(()=>{syncing=false; refresh()})" class="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded">
+            <span x-text="syncing ? 'Syncing...' : 'Sync All'"></span>
+          </button>
+        </div>
+
+        <template x-if="topSignatures.length === 0">
+          <p class="text-gray-500 text-sm">No federated signatures yet. Signatures appear when other instances report bots.</p>
+        </template>
+
+        <table class="w-full text-sm" x-show="topSignatures.length > 0">
+          <thead>
+            <tr class="text-left text-gray-500 border-b">
+              <th class="pb-2">Hash (partial)</th>
+              <th class="pb-2">Type</th>
+              <th class="pb-2">Confidence</th>
+              <th class="pb-2">Reporters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="sig in topSignatures" :key="sig.hash + sig.hashType">
+              <tr class="border-b">
+                <td class="py-2 font-mono text-xs" x-text="sig.hash.substring(0, 8) + '...'"></td>
+                <td class="py-2" x-text="sig.hashType"></td>
+                <td class="py-2" x-text="(sig.confidence * 100).toFixed(0) + '%'"></td>
+                <td class="py-2" x-text="sig.reporterCount"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
       </div>
 
-      <template x-if="topSignatures.length === 0">
-        <p class="text-gray-500 text-sm">No federated signatures yet. Signatures appear when other instances report bots.</p>
-      </template>
-
-      <table class="w-full text-sm" x-show="topSignatures.length > 0">
-        <thead>
-          <tr class="text-left text-gray-500 border-b">
-            <th class="pb-2">Hash (partial)</th>
-            <th class="pb-2">Type</th>
-            <th class="pb-2">Confidence</th>
-            <th class="pb-2">Reporters</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="sig in topSignatures" :key="sig.hash + sig.hashType">
-            <tr class="border-b">
-              <td class="py-2 font-mono text-xs" x-text="sig.hash.substring(0, 8) + '...'"></td>
-              <td class="py-2" x-text="sig.hashType"></td>
-              <td class="py-2" x-text="(sig.confidence * 100).toFixed(0) + '%'"></td>
-              <td class="py-2" x-text="sig.reporterCount"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
+      <div class="bg-white p-4 rounded shadow">
+        <h3 class="text-lg font-bold mb-3">Federation PSK</h3>
+        <template x-if="!showNewPsk">
+          <div>
+            <div class="flex items-center gap-3 mb-3">
+              <p class="text-sm text-gray-600">Current PSK:</p>
+              <span class="font-mono text-sm bg-gray-100 px-2 py-1 rounded" x-text="pskInfo.hasPsk ? pskInfo.masked : 'Not set'"></span>
+            </div>
+            <button @click="rotatePsk()" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded text-sm" :disabled="rotatingPsk">
+              <span x-text="rotatingPsk ? 'Rotating...' : 'Rotate PSK'"></span>
+            </button>
+            <p class="text-xs text-gray-400 mt-2">Rotating the PSK will invalidate all peer connections. Update peers with the new key.</p>
+          </div>
+        </template>
+        <template x-if="showNewPsk">
+          <div class="border-2 border-orange-300 bg-orange-50 p-4 rounded">
+            <p class="text-sm font-bold text-orange-800 mb-2">Save this PSK - it will not be shown again</p>
+            <div class="flex items-center gap-2 mb-3">
+              <code class="bg-white border p-2 rounded text-xs break-all flex-1 select-all" x-text="newPskValue"></code>
+              <button @click="navigator.clipboard.writeText(newPskValue)" class="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded">Copy</button>
+            </div>
+            <button @click="showNewPsk = false" class="text-sm text-gray-600 hover:text-gray-800">Dismiss</button>
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </div>
@@ -637,6 +670,10 @@ document.addEventListener('alpine:init', () => {
     addingPeer: false,
     syncing: false,
     peerChart: null,
+    pskInfo: { hasPsk: false, masked: '' },
+    rotatingPsk: false,
+    showNewPsk: false,
+    newPskValue: '',
 
     async init() {
       await this.refresh();
@@ -646,18 +683,42 @@ document.addEventListener('alpine:init', () => {
     async refresh() {
       this.loading = true;
       try {
-        const [statsRes, peersRes] = await Promise.all([
+        const [statsRes, peersRes, pskRes] = await Promise.all([
           fetch('/admin/api/federation/stats').then(r => r.json()),
-          fetch('/admin/api/federation/peers').then(r => r.json())
+          fetch('/admin/api/federation/peers').then(r => r.json()),
+          fetch('/admin/api/federation/psk').then(r => r.json())
         ]);
         this.stats = statsRes;
         this.peers = peersRes;
         this.topSignatures = statsRes.topSignatures || [];
+        this.pskInfo = pskRes;
         this.updatePeerChart();
       } catch (e) {
         console.error('Failed to load federation data:', e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    async rotatePsk() {
+      if (!confirm('Are you sure you want to rotate the federation PSK? All peer connections will need to be updated with the new key.')) return;
+      this.rotatingPsk = true;
+      try {
+        const res = await fetch('/admin/api/federation/rotate-psk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'SavannaAdmin', 'X-CSRF-Token': getCsrfToken() }
+        });
+        const data = await res.json();
+        if (data.ok) {
+          this.newPskValue = data.psk;
+          this.showNewPsk = true;
+          this.pskInfo = { hasPsk: true, masked: data.psk.slice(0, 8) + '...' + data.psk.slice(-8) };
+        }
+      } catch (e) {
+        console.error('Failed to rotate PSK:', e);
+        alert('Failed to rotate PSK');
+      } finally {
+        this.rotatingPsk = false;
       }
     },
 

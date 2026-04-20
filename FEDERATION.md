@@ -92,9 +92,28 @@ FEDERATION_PEERS=https://forum.example.com,https://shop.example.com
 
 # Pre-shared key for peer authentication
 FEDERATION_PSK=your-secret-key-here
+# Recommended: openssl rand -hex 32
 
 # Sync interval (default: 5 minutes)
 FEDERATION_SYNC_INTERVAL=300000
+
+# Offline peer recovery sync interval (default: 30 minutes)
+FEDERATION_OFFLINE_SYNC_INTERVAL=1800000
+
+# Consecutive failures before peer is marked offline (default: 3)
+FEDERATION_OFFLINE_THRESHOLD=3
+
+# Request timeout and retry policy
+FEDERATION_REQUEST_TIMEOUT_MS=30000
+FEDERATION_MAX_RETRIES=3
+FEDERATION_BASE_RETRY_DELAY_MS=5000
+FEDERATION_MAX_RETRY_DELAY_MS=60000
+
+# Max accepted sync payload size (bytes)
+FEDERATION_MAX_PAYLOAD_BYTES=5242880
+
+# For Docker/internal deployments, allow private peers
+FEDERATION_ALLOW_PRIVATE_PEERS=false
 ```
 
 ### Admin UI
@@ -117,6 +136,11 @@ Federation is managed via the Admin UI at `/admin/federation`:
 | POST | /admin/api/federation/sync | Trigger manual sync |
 | GET | /admin/api/federation/stats | Federation statistics |
 
+## Operational Notes
+
+- Peer URLs are normalized on write (trim + no trailing slash on root path) and stored with a unique constraint. Re-adding an existing URL updates PSK/trust/status instead of creating duplicates.
+- This prevents stale duplicate peer records with mismatched PSKs, which can cause intermittent HMAC auth failures.
+
 ## Federation Tiers
 
 ### Community (Public Repo)
@@ -138,6 +162,13 @@ Federation is managed via the Admin UI at `/admin/federation`:
 2. **Trust Model**: Only add peers you trust — they can influence your bot decisions
 3. **Network Isolation**: Federation traffic should ideally be over private networks or VPN
 4. **No Identifiers**: The protocol is designed so no PII or identifiable data leaves your network
+
+## Offline Peer Recovery
+
+- Peers are marked `offline` after `FEDERATION_OFFLINE_THRESHOLD` consecutive pull failures.
+- Active peers sync on `FEDERATION_SYNC_INTERVAL`.
+- Offline peers are retried on `FEDERATION_OFFLINE_SYNC_INTERVAL` for automatic recovery.
+- A successful pull resets failure counters and returns peer status to `active`.
 
 ## Implementation Details
 

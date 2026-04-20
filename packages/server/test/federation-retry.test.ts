@@ -18,10 +18,21 @@ import {
 } from '../src/services/federation-errors.js';
 import { retryWithBackoff } from '../src/services/retry.js';
 
+const CSRF_TOKEN = 'test-csrf-token-for-federation-retry';
+
 function adminCookieHeader(): string {
   const password = process.env.ADMIN_PASSWORD ?? 'admin';
   const hash = crypto.createHash('sha256').update(password).digest('hex');
-  return `savanna_admin=${hash}`;
+  return `savanna_admin=${hash}; savanna_csrf=${CSRF_TOKEN}`;
+}
+
+/** Headers required for admin POST endpoints protected by requireAdminCsrf */
+function adminCsrfHeaders(): Record<string, string> {
+  return {
+    cookie: adminCookieHeader(),
+    'x-requested-with': 'SavannaAdmin',
+    'x-csrf-token': CSRF_TOKEN,
+  };
 }
 
 function makeHmac(payload: object, psk: string): string {
@@ -32,7 +43,7 @@ async function addPeerViaAdmin(app: FastifyInstance, peerUrl: string, psk: strin
   const res = await app.inject({
     method: 'POST',
     url: '/admin/api/federation/peers',
-    headers: { cookie: adminCookieHeader() },
+    headers: adminCsrfHeaders(),
     payload: { peerUrl, psk },
   });
   expect(res.statusCode).toBe(200);
@@ -236,7 +247,7 @@ describe('federation peer failure tracking', () => {
     const syncResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/sync',
-      headers: { cookie: adminCookieHeader(), 'x-requested-with': 'SavannaAdmin' },
+      headers: adminCsrfHeaders(),
       payload: { peerUrl: '' },
     });
 
@@ -284,7 +295,7 @@ describe('federation peer failure tracking', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/sync',
-      headers: { cookie: adminCookieHeader(), 'x-requested-with': 'SavannaAdmin' },
+      headers: adminCsrfHeaders(),
       payload: { peerUrl: '' },
     });
 
@@ -303,7 +314,7 @@ describe('federation peer failure tracking', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/sync',
-      headers: { cookie: adminCookieHeader(), 'x-requested-with': 'SavannaAdmin' },
+      headers: adminCsrfHeaders(),
       payload: { peerUrl: '' },
     });
 
@@ -319,6 +330,56 @@ describe('federation peer failure tracking', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('does not increment failures when pull succeeds but push fails', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/federation/state')) {
+        return new Response(JSON.stringify({
+          signatures: [],
+          stateHash: 'pull-ok',
+          syncVersion: 1,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.endsWith('/federation/sync')) {
+        callCount++;
+        throw new Error('ECONNREFUSED on push');
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }));
+
+    await addPeerViaAdmin(app, 'https://peer-test-pushfail.example.com:19996', 'pushfail-psk');
+
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO bot_signatures (hash, hash_type, match_count, first_seen, last_seen, source)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run('push-fail-hash', 'ip', 3, now - 1000, now, 'test');
+
+    const syncResponse = await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/sync',
+      headers: adminCsrfHeaders(),
+      payload: { peerUrl: '' },
+    });
+
+    expect(syncResponse.statusCode).toBe(200);
+    const syncBody = syncResponse.json() as { results?: Array<{ errors: string[] }> };
+    expect(syncBody.results?.[0]?.errors.some((e) => e.includes('Push failed'))).toBe(true);
+
+    const peersResponse = await app.inject({
+      method: 'GET',
+      url: '/admin/api/federation/peers',
+      headers: { cookie: adminCookieHeader() },
+    });
+    const peers = peersResponse.json() as Array<Record<string, unknown>>;
+    expect(peers[0].consecutiveFailures).toBe(0);
+    expect(peers[0].status).toBe('active');
+    expect(callCount).toBeGreaterThan(0);
+
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('payload size protection', () => {
@@ -329,6 +390,85 @@ describe('payload size protection', () => {
     expect(error.contentLength).toBe(10_000_000);
     expect(error.maxBytes).toBe(5_242_880);
     expect(error.peerUrl).toBe('http://peer1:3000');
+  });
+});
+
+describe('federation pull payload hardening', () => {
+  let app: FastifyInstance;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(async () => {
+    app = buildServer();
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    await app.close();
+    db.exec('DELETE FROM federation_sync_state;');
+    db.exec('DELETE FROM federated_signature_reports;');
+    db.exec('DELETE FROM federated_signatures;');
+    db.exec('DELETE FROM federation_peers;');
+  });
+
+  it('normalizes malformed pulled signatures instead of crashing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/federation/state')) {
+        return new Response(JSON.stringify({
+          signatures: [
+            null,
+            123,
+            { hashType: 'ip', confidence: 0.9 },
+            { hash: 'valid-hash', hashType: 'invalid-type', attackType: 'x'.repeat(80), confidence: 7 },
+          ],
+          stateHash: 42,
+          syncVersion: '5.8',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.endsWith('/federation/sync')) {
+        return new Response(JSON.stringify({ received: 0, merged: 0, skipped: 0, status: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }));
+
+    await addPeerViaAdmin(app, 'https://peer-test-pullsanitize.example.com:19995', 'pullsanitize-psk');
+
+    const syncResponse = await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/sync',
+      headers: adminCsrfHeaders(),
+      payload: { peerUrl: '' },
+    });
+
+    expect(syncResponse.statusCode).toBe(200);
+    const syncBody = syncResponse.json() as { results: Array<{ merged: number; skipped: number }> };
+    expect(syncBody.results[0].merged).toBeGreaterThanOrEqual(1);
+    expect(syncBody.results[0].skipped).toBeGreaterThanOrEqual(3);
+
+    const signature = db.prepare(
+      'SELECT hash, hash_type, attack_type, confidence, reporter_count FROM federated_signatures WHERE hash = ?'
+    ).get('valid-hash') as {
+      hash: string;
+      hash_type: string;
+      attack_type: string;
+      confidence: number;
+      reporter_count: number;
+    } | undefined;
+
+    expect(signature).toBeDefined();
+    expect(signature?.hash_type).toBe('ip');
+    expect(signature?.attack_type.length).toBeLessThanOrEqual(50);
+    expect(signature?.confidence).toBe(1);
+    expect(signature?.reporter_count).toBe(1);
+
+    const syncState = db.prepare(
+      'SELECT sync_version FROM federation_sync_state LIMIT 1'
+    ).get() as { sync_version: number } | undefined;
+    expect(syncState?.sync_version).toBe(5);
   });
 });
 
@@ -491,7 +631,7 @@ describe('federation SSRF validation', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/admin/api/federation/peers',
-        headers: { cookie: adminCookieHeader() },
+        headers: adminCsrfHeaders(),
         payload: {
           peerUrl: 'http://169.254.169.254/latest/meta-data',
           psk: 'test-psk',
@@ -512,7 +652,7 @@ describe('federation SSRF validation', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/admin/api/federation/peers',
-        headers: { cookie: adminCookieHeader() },
+        headers: adminCsrfHeaders(),
         payload: {
           peerUrl: 'file:///etc/passwd',
           psk: 'test-psk',
@@ -540,13 +680,34 @@ describe('federation SSRF validation', () => {
         const response = await app.inject({
           method: 'POST',
           url: '/admin/api/federation/peers',
-          headers: { cookie: adminCookieHeader() },
+          headers: adminCsrfHeaders(),
           payload: { peerUrl: url, psk: 'psk' },
         });
         expect(response.statusCode).toBe(400);
         const body = response.json() as { error: string };
         expect(body.error.toLowerCase()).toMatch(/localhost|private/);
       }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects non-routable hostname labels when private peers are disabled', async () => {
+    const app = buildServer();
+    await app.ready();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/admin/api/federation/peers',
+        headers: adminCsrfHeaders(),
+        payload: {
+          peerUrl: 'https://node-a:3000',
+          psk: 'label-host-psk',
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = response.json() as { error: string };
+      expect(body.error.toLowerCase()).toContain('routable hostname');
     } finally {
       await app.close();
     }
@@ -568,7 +729,7 @@ describe('federation SSRF validation', () => {
         const response = await app.inject({
           method: 'POST',
           url: '/admin/api/federation/peers',
-          headers: { cookie: adminCookieHeader() },
+          headers: adminCsrfHeaders(),
           payload: { peerUrl: url, psk: 'psk' },
         });
         expect(response.statusCode).toBe(400);
@@ -587,7 +748,7 @@ describe('federation SSRF validation', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/admin/api/federation/peers',
-        headers: { cookie: adminCookieHeader() },
+        headers: adminCsrfHeaders(),
         payload: {
           peerUrl: 'https://203.0.113.50:8080',
           psk: 'public-peer-psk',
@@ -608,7 +769,7 @@ describe('federation SSRF validation', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/admin/api/federation/peers',
-        headers: { cookie: adminCookieHeader() },
+        headers: adminCsrfHeaders(),
         payload: {
           peerUrl: 'http://203.0.113.50:8080',
           psk: 'http-psk',
@@ -796,7 +957,7 @@ describe('federation offline peer backoff', () => {
     const syncResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/sync',
-      headers: { cookie: adminCookieHeader(), 'x-requested-with': 'SavannaAdmin' },
+      headers: adminCsrfHeaders(),
       payload: { peerUrl: 'https://peer-test-banned.example.com:19997' },
     });
 

@@ -12,11 +12,14 @@ import { collectTremor } from './collectors/tremor.js';
 import { collectWebRTCOracle } from './collectors/webrtc-oracle.js';
 import type { BehavioralData } from './types.js';
 
+// Re-export types for consumer TypeScript support
+export type { WidgetConfig, WidgetCallbacks, SavannaGuardWidget, BehavioralData, ChallengeResponse, SolveResponse } from './types.js';
+
 declare global {
   interface Window {
     SavannaGuard: {
       getToken: () => Promise<string | null>;
-      init: (apiUrl: string) => void;
+      init: (apiUrl: string, config?: { cspNonce?: string }) => void;
     };
   }
 }
@@ -25,6 +28,7 @@ let pendingToken: string | null = null;
 let pendingResolvers: Array<(token: string | null) => void> = [];
 let runPromise: Promise<void> | null = null;
 let currentApiUrl = '';
+let currentCspNonce: string | undefined;
 
 function flushPending(token: string | null): void {
   for (const resolve of pendingResolvers) {
@@ -96,6 +100,7 @@ async function collectAllBehavioralData(): Promise<BehavioralData> {
     language: navigatorData.language,
     timezone: navigatorData.timezone,
     timezoneOffset: navigatorData.timezoneOffset,
+    cookiesEnabled: navigatorData.cookiesEnabled,
     hardwareConcurrency: navigatorData.hardwareConcurrency,
     maxTouchPoints: navigatorData.maxTouchPoints,
     networkType: networkData.effectiveType || undefined,
@@ -144,11 +149,12 @@ async function run(apiUrl: string): Promise<void> {
   }
 }
 
-function ensureRun(apiUrl: string): void {
+function ensureRun(apiUrl: string, nonce?: string): void {
   const normalizedApiUrl = apiUrl.replace(/\/$/, '');
-  if (runPromise && normalizedApiUrl === currentApiUrl) return;
+  if (runPromise && normalizedApiUrl === currentApiUrl && nonce === currentCspNonce) return;
 
   currentApiUrl = normalizedApiUrl;
+  currentCspNonce = nonce;
   pendingToken = null;
 
   runPromise = run(normalizedApiUrl)
@@ -165,8 +171,8 @@ const defaultApiUrl = detectDefaultApiUrl();
 ensureRun(defaultApiUrl);
 
 window.SavannaGuard = {
-  init(apiUrl: string) {
-    ensureRun(apiUrl);
+  init(apiUrl: string, initConfig?: { cspNonce?: string }) {
+    ensureRun(apiUrl, initConfig?.cspNonce);
   },
   getToken(): Promise<string | null> {
     if (pendingToken) return Promise.resolve(pendingToken);

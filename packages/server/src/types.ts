@@ -12,6 +12,9 @@ export interface Session {
   keyboardScore: number;
   timingScore: number;
   powScore: number;
+  timingOracleScore: number;
+  tremorScore: number;
+  webrtcOracleScore: number;
   finalScore: number;
   verdict: 'human' | 'bot' | 'suspicious' | 'pending';
   verdictToken: string | null;

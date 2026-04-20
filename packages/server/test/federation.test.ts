@@ -34,10 +34,21 @@ interface SyncAllResponse {
   }>;
 }
 
+const CSRF_TOKEN = 'test-csrf-token-for-federation';
+
 function adminCookieHeader(): string {
   const password = process.env.ADMIN_PASSWORD ?? 'admin';
   const hash = crypto.createHash('sha256').update(password).digest('hex');
-  return `savanna_admin=${hash}`;
+  return `savanna_admin=${hash}; savanna_csrf=${CSRF_TOKEN}`;
+}
+
+/** Headers required for admin POST endpoints protected by requireAdminCsrf */
+function adminCsrfHeaders(): Record<string, string> {
+  return {
+    cookie: adminCookieHeader(),
+    'x-requested-with': 'SavannaAdmin',
+    'x-csrf-token': CSRF_TOKEN,
+  };
 }
 
 describe('federation routes', () => {
@@ -66,9 +77,7 @@ describe('federation routes', () => {
     const createResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-a.example.com:18081',
         psk: 'top-secret-psk',
@@ -100,9 +109,7 @@ describe('federation routes', () => {
     const createResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-a.example.com:18081',
         psk: 'test-psk',
@@ -114,6 +121,72 @@ describe('federation routes', () => {
     expect(created.peer.consecutiveFailures).toBe(0);
     expect(created.peer.lastFailureReason).toBe('');
     expect(typeof created.peer.lastSuccessAt).toBe('number');
+  });
+
+  it('updates existing peer for same URL instead of creating duplicates', async () => {
+    const peerUrl = 'https://fed-peer-dup.example.com:18083';
+
+    const firstAdd = await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/peers',
+      headers: adminCsrfHeaders(),
+      payload: {
+        peerUrl,
+        psk: 'first-psk',
+      },
+    });
+
+    expect(firstAdd.statusCode).toBe(200);
+
+    db.prepare(
+      `UPDATE federation_peers
+       SET status = 'offline', consecutive_failures = 5, last_failure_reason = 'old-failure'
+       WHERE peer_url = ?`
+    ).run(peerUrl);
+
+    const secondAdd = await app.inject({
+      method: 'POST',
+      url: '/admin/api/federation/peers',
+      headers: adminCsrfHeaders(),
+      payload: {
+        peerUrl: `${peerUrl}/`,
+        psk: 'second-psk',
+      },
+    });
+
+    expect(secondAdd.statusCode).toBe(200);
+
+    const rows = db.prepare(
+      `SELECT peer_id, peer_url, psk, status, consecutive_failures, last_failure_reason
+       FROM federation_peers
+       WHERE peer_url = ?`
+    ).all(peerUrl) as Array<{
+      peer_id: string;
+      peer_url: string;
+      psk: string;
+      status: string;
+      consecutive_failures: number;
+      last_failure_reason: string;
+    }>;
+
+    expect(rows.length).toBe(1);
+    expect(rows[0].peer_url).toBe(peerUrl);
+    expect(rows[0].psk).toBe('second-psk');
+    expect(rows[0].status).toBe('active');
+    expect(rows[0].consecutive_failures).toBe(0);
+    expect(rows[0].last_failure_reason).toBe('');
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/admin/api/federation/peers',
+      headers: {
+        cookie: adminCookieHeader(),
+      },
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    const peers = listResponse.json() as Array<Record<string, unknown>>;
+    expect(peers.length).toBe(1);
   });
 
   it('triggers sync for all peers when peerUrl is empty', async () => {
@@ -146,9 +219,7 @@ describe('federation routes', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-a.example.com:18081',
         psk: 'peer-a-psk',
@@ -158,9 +229,7 @@ describe('federation routes', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-b.example.com:18082',
         psk: 'peer-b-psk',
@@ -170,10 +239,7 @@ describe('federation routes', () => {
     const syncResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/sync',
-      headers: {
-        cookie: adminCookieHeader(),
-        'x-requested-with': 'SavannaAdmin',
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: '',
       },
@@ -201,9 +267,7 @@ describe('federation routes', () => {
     const addResponse = await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-single.example.com:19000',
         psk: 'single-peer-psk',
@@ -273,9 +337,7 @@ describe('federation routes', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-skip.example.com:19001',
         psk: 'skip-psk',
@@ -342,9 +404,7 @@ describe('federation routes', () => {
     await app.inject({
       method: 'POST',
       url: '/admin/api/federation/peers',
-      headers: {
-        cookie: adminCookieHeader(),
-      },
+      headers: adminCsrfHeaders(),
       payload: {
         peerUrl: 'https://fed-peer-payload.example.com:19002',
         psk: 'payload-psk',

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import { config } from './config.js';
+import { isDbHealthy } from './db.js';
 import { challengeRoutes } from './routes/challenge.js';
 import { tokenRoutes } from './routes/token.js';
 import { adminRoutes } from './routes/admin.js';
@@ -20,7 +21,13 @@ export function buildServer(): FastifyInstance {
   app.register(cookie);
   app.register(formbody);
 
-  app.get('/health', async () => ({ ok: true }));
+  app.get('/health', async (_req, rep) => {
+    const dbOk = isDbHealthy();
+    if (!dbOk) {
+      return rep.status(503).send({ ok: false, error: 'Database unavailable' });
+    }
+    return { ok: true };
+  });
 
   challengeRoutes(app);
   tokenRoutes(app);
@@ -87,9 +94,9 @@ export function buildServer(): FastifyInstance {
 
 export async function startServer(): Promise<FastifyInstance> {
   const app = buildServer();
-  await app.listen({ port: config.port });
+  await app.listen({ host: config.host, port: config.port });
 
-  console.log(`SavannaGuard server running on port ${config.port}`);
+  console.log(`SavannaGuard server running on ${config.host}:${config.port}`);
   console.log(`  API:        http://localhost:${config.port}/api/v1/`);
   console.log(`  Admin:      http://localhost:${config.port}/admin`);
   console.log(`  Widget:     http://localhost:${config.port}/widget/savanna-widget.iife.js`);

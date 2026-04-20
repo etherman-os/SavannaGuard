@@ -37,4 +37,77 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Track widget gzip size (warning only)
+        if: matrix.node-version == 20
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const zlib = require('zlib');
+
+          const widgetPath = 'packages/widget/dist/savanna-widget.iife.js';
+          const thresholdBytes = 7168;
+
+          if (!fs.existsSync(widgetPath)) {
+            console.log(`::warning::Widget bundle not found at ${widgetPath}`);
+            process.exit(0);
+          }
+
+          const source = fs.readFileSync(widgetPath);
+          const gzipBytes = zlib.gzipSync(source).length;
+
+          console.log(`Widget gzip size: ${gzipBytes} bytes (soft threshold: ${thresholdBytes} bytes)`);
+
+          if (gzipBytes > thresholdBytes) {
+            console.log(`::warning::Widget gzip size ${gzipBytes} exceeds soft threshold ${thresholdBytes} bytes`);
+          }
+          NODE
       - run: pnpm test
+
+  federation-docker:
+    needs: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start federation test stack
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose -f docker-compose.test.yml up -d --build
+          else
+            docker-compose -f docker-compose.test.yml up -d --build
+          fi
+      - name: Run federation docker integration tests
+        env:
+          RUN_DOCKER_TESTS: '1'
+          NODE_A_URL: http://localhost:3001
+          NODE_B_URL: http://localhost:3002
+          NODE_A_PEER_URL: http://node-a:3000
+          NODE_B_PEER_URL: http://node-b:3000
+          FEDERATION_PSK: test-psk-key-for-federation-testing
+          ADMIN_PASSWORD: admin
+          SYNC_WAIT_MS: '5000'
+        run: pnpm --filter @savannaguard/server test -- --testNamePattern="federation-docker"
+      - name: Federation logs on failure
+        if: failure()
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose -f docker-compose.test.yml logs --no-color
+          else
+            docker-compose -f docker-compose.test.yml logs --no-color
+          fi
+      - name: Stop federation test stack
+        if: always()
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose -f docker-compose.test.yml down --remove-orphans --volumes
+          else
+            docker-compose -f docker-compose.test.yml down --remove-orphans --volumes
+          fi

@@ -45,7 +45,9 @@ claude.md
 savannaguard.txt
 ARCHITECTURE_RULES.txt
 DELTA_REPORT.md
-docs/
+docs/*
+!docs/BENCHMARKS.md
+docs/perf/*.json
 docs/superpowers/
 
 # Private planning notes (keep sensitive business ideas local)

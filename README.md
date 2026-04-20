@@ -151,6 +151,18 @@ docker compose -f docker-compose.test.yml down --remove-orphans
 
 If your environment does not have the Compose plugin, use `docker-compose` instead of `docker compose`.
 
+## Performance Baseline
+
+SavannaGuard includes a reproducible free baseline benchmark script.
+
+```bash
+pnpm --filter @savannaguard/server build
+node scripts/bench/free-baseline.mjs
+```
+
+Output is written to `docs/perf/free-baseline-YYYY-MM-DD.json` by default.
+See `docs/BENCHMARKS.md` for methodology and interpretation.
+
 ## Form Integration
 
 ```html

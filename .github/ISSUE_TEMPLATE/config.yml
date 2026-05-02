@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/etherman-os/SavannaGuard/security
+    about: Please report sensitive security issues privately when possible.
+  - name: Commercial licensing
+    url: https://github.com/etherman-os/SavannaGuard/blob/main/COMMERCIAL_USE.md
+    about: Hosted or managed resale requires a separate commercial agreement.

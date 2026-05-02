@@ -31,36 +31,14 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../services/logger.js';
 import { checkAdminRateLimit } from '../services/rateLimit.js';
+import { requireAdminJson, safeEquals } from '../services/adminAuth.js';
 
-const ADMIN_COOKIE_NAME = 'savanna_admin';
 const MAX_PAYLOAD_BYTES = Number.isFinite(config.federation.maxPayloadBytes) && config.federation.maxPayloadBytes > 0
   ? config.federation.maxPayloadBytes
   : 5 * 1024 * 1024;
 
-function sha256(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function safeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, 'utf-8');
-  const rightBuffer = Buffer.from(right, 'utf-8');
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function currentAdminCookieValue(): string {
-  return sha256(config.adminPassword);
-}
-
-function verifyPassword(token: string | undefined): boolean {
-  if (!token) return false;
-  return safeEquals(token, currentAdminCookieValue());
-}
-
 function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
-  if (verifyPassword(request.cookies[ADMIN_COOKIE_NAME])) return true;
-  reply.status(401).send({ error: 'Unauthorized' });
-  return false;
+  return requireAdminJson(request, reply);
 }
 
 function requireAdminCsrf(request: FastifyRequest, reply: FastifyReply): boolean {

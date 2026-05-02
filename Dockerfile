@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # === Stage 1: Build ===
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # better-sqlite3 native addon requires C++ build toolchain
 RUN apk add --no-cache build-base python3
@@ -20,21 +20,23 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
-# Prune to production-only dependencies
+# Reinstall production-only dependencies into a clean node_modules tree
 ENV CI=false
 ENV PNPM_ENABLE_BUILD_SCRIPTS=true
 ENV npm_config_build_from_source=true
-RUN corepack enable \
- && pnpm install --prod --frozen-lockfile --config.confirmModulesPurge=false \
+RUN rm -rf node_modules packages/server/node_modules packages/widget/node_modules \
+ && corepack enable \
+ && pnpm install --prod --frozen-lockfile \
  && cd /app/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 \
  && pnpm run install
 
 # === Stage 2: Production runtime ===
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 # better-sqlite3 native addon needs libstdc++ at runtime
 # wget is required for docker-compose healthcheck command
-RUN apk add --no-cache libstdc++ tini wget
+RUN apk add --no-cache libstdc++ tini wget \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Create writable data directory for SQLite
 RUN mkdir -p /data && chown -R node:node /data

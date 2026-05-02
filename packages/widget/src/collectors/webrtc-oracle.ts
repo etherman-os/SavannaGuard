@@ -1,14 +1,14 @@
 /**
  * WebRTC Network Topology Oracle
  *
- * Detects network topology characteristics by passively harvesting
- * WebRTC ICE candidates without making any actual connections.
+ * Detects local network topology characteristics by passively harvesting
+ * host ICE candidates without configured STUN/TURN servers.
  *
  * Detection signals:
  * - RFC1918 private IP presence (real NAT environment)
  * - ICE candidate types and counts
  * - Single-interface indicators (datacenter/VM)
- * - VPN leak detection via candidate/IP mismatches
+ * - VPN/topology mismatch heuristics from local candidates only
  */
 
 export interface WebRTCOracleData {
@@ -86,12 +86,9 @@ export async function collectWebRTCOracle(): Promise<WebRTCOracleData> {
     const candidates: ICECandidate[] = [];
     const localIPs = new Set<string>();
 
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-    });
+    // Keep the privacy guarantee: do not contact public STUN/TURN services.
+    // This limits srflx/relay visibility but avoids third-party network calls.
+    const pc = new RTCPeerConnection({ iceServers: [] });
 
     // Create data channel to trigger ICE gathering
     const dataChannel = pc.createDataChannel('probe', { ordered: false });

@@ -1,12 +1,18 @@
 # SavannaGuard — Privacy-First Bot Security Layer
 
+[![CI](https://github.com/etherman-os/SavannaGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/etherman-os/SavannaGuard/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/etherman-os/SavannaGuard/actions/workflows/codeql.yml/badge.svg)](https://github.com/etherman-os/SavannaGuard/actions/workflows/codeql.yml)
+[![License](https://img.shields.io/badge/license-source--available-blue)](LICENSE)
+
 **Live Demo:** https://savannaguard.com
 
 SavannaGuard is a true self-hosted, privacy-respecting security layer designed to do exactly what traditional CAPTCHAs miss. While other solutions focus only on frustrating image puzzles and tracking users across the web, SavannaGuard functions as an invisible, supplementary defense-in-depth tool.
 
 By combining **Adaptive Proof-of-Work** that auto-adjusts to attack volume, **Per-Site ML Learning** (Online Gaussian model) that learns your real users' behavior, **Bot Signature Tracking** that flags recurring attackers, **JS Engine Timing Oracle** that detects headless browsers via V8 JIT patterns, and **Federated Bot Intelligence** that shares threat intelligence across instances — it creates a robust shield that can act as an alternative to—or an additional layer alongside—existing security measures.
 
-**Zero third-party dependencies:** No Redis requirement, no external API calls to big tech, and absolutely no behavioral data leaving your servers.
+**No third-party service dependency:** No Redis requirement, no required hosted API calls, and no behavioral data leaving your servers by default.
+
+**License note:** SavannaGuard Community is source-available, not OSI open source. Community self-hosting and internal use are allowed; hosted/managed resale requires a separate commercial agreement.
 
 ## Key Features
 
@@ -23,10 +29,10 @@ Flags recurring attackers by IP+UA hash. Three matches = high confidence bot. Si
 Detects headless browsers (Puppeteer, Playwright, Selenium) via timing analysis of V8 JIT compilation patterns, crypto operations, and requestAnimationFrame behavior — **without UA sniffing**.
 
 ### Physiological Tremor Analysis
-Human hands exhibit involuntary tremor at 8–12 Hz — a neurological constant present in all healthy users. SavannaGuard applies FFT to mouse velocity streams and measures power in this frequency band. Bots produce either flat noise or programmatic smoothness; neither matches biological entropy.
+SavannaGuard samples fine-grained pointer movement and checks for natural high-frequency jitter patterns that are difficult for simple automation to reproduce. This signal is used as one weighted heuristic, not as a standalone identity or health classifier.
 
 ### WebRTC Topology Oracle
-Before any form interaction, SavannaGuard passively collects WebRTC ICE candidates — the browser's own network self-report. Datacenter environments, single-interface VMs, and VPN leaks produce topology signatures that real home/office users never exhibit. Zero network requests required.
+Before form interaction, SavannaGuard can inspect local WebRTC host ICE candidates without configured STUN/TURN servers. This helps identify low-complexity VM/datacenter-like topology while preserving the default no-third-party-network-call model.
 
 ### Federated Bot Intelligence (P2P)
 Self-hosted instances share bot signatures peer-to-peer via gossip protocol. When one instance detects a bot, all instances learn. No central server, no raw data leaves your network.
@@ -38,6 +44,11 @@ Mouse dynamics, keystroke cadence, canvas fingerprint, WebGL rendering, screen m
 
 - **Website:** https://savannaguard.com
 - **Repository:** https://github.com/etherman-os/SavannaGuard
+- **Docs:** [docs/README.md](docs/README.md)
+- **Security:** [SECURITY.md](SECURITY.md)
+- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Support:** [SUPPORT.md](SUPPORT.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
 ## ⚡ 1-Minute Setup
 
@@ -83,11 +94,17 @@ pnpm --filter @savannaguard/server start
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SECRET_KEY` | ✅ Yes | — | Token encryption key. Generate with `openssl rand -hex 32`. |
-| `ADMIN_PASSWORD` | No | `admin` | Admin dashboard login password. |
+| `ADMIN_PASSWORD` | ✅ Yes | — | Admin dashboard login password. Docker Compose requires it; production rejects `admin`. |
+| `ADMIN_SESSION_TTL_MS` | No | `43200000` | Admin session lifetime in ms (12 hours). |
 | `PORT` | No | `3000` | HTTP server port. |
 | `HOST` | No | `0.0.0.0` | Host interface to bind (use `0.0.0.0` in Docker). |
 | `DB_PATH` | No | `./data/savannaguard.db` | SQLite database path. Use `/data/` prefix in Docker. |
+| `BODY_LIMIT_BYTES` | No | `131072` | Max accepted public challenge/token API request body size. |
 | `LOG_LEVEL` | No | `info` | Logging verbosity: `debug`, `info`, `warn`, `error`. |
+| `TRUST_PROXY` | No | `false` | Trust `X-Forwarded-*` headers when behind a proxy you control. |
+| `SECURITY_HEADERS_ENABLED` | No | `true` | Emit baseline browser security headers. |
+| `CORS_ALLOWED_ORIGINS` | No | `*` | Allowed browser origins for public challenge/token endpoints. Use comma-separated origins in production. |
+| `TOKEN_SINGLE_USE` | No | `true` | Reject replayed verification tokens after first successful validation. |
 | `FEDERATION_ENABLED` | No | `false` | Enable P2P federation for sharing bot signatures. |
 | `FEDERATION_PEERS` | No | — | Comma-separated peer URLs (e.g. `https://sg1.example.com,https://sg2.example.com`). |
 | `FEDERATION_PSK` | No | — | Pre-shared key for peer authentication. Required if federation is enabled (recommended: `openssl rand -hex 32`). |
@@ -129,6 +146,36 @@ SavannaGuard usage flow in production:
 2. Widget solves PoW and sends telemetry to `/api/v1/challenge/solve`.
 3. Backend validates the issued token with `/api/v1/token/validate` before processing user action.
 
+Tokens are single-use by default. Validate the token once on your backend at the
+moment you accept the protected action, then discard it.
+
+## Security Model
+
+SavannaGuard is a defense-in-depth layer, not a complete replacement for normal
+application security. Keep your existing server-side validation, abuse limits,
+account throttles, WAF/proxy rules, and fraud controls.
+
+Default hardening includes:
+
+- Signed, expiring admin sessions
+- CSRF protection for mutating admin actions
+- Single-use verification tokens
+- SQLite-backed challenge/session state
+- Baseline browser security headers
+- Baseline Content Security Policy
+- No configured third-party STUN/TURN services in the widget
+- SSRF checks on federation peer URLs
+- Optional federation HMAC authentication
+
+Operational requirements:
+
+- Use HTTPS in production.
+- Set strong `SECRET_KEY`, `ADMIN_PASSWORD`, and federation PSKs.
+- Restrict `CORS_ALLOWED_ORIGINS` to your real frontend origin(s) once deployed.
+- Set `TRUST_PROXY=true` only behind a reverse proxy you control.
+- Review `PASSIVE_PROTECTION_BLOCK_DC=true` in staging before enforcing it.
+- Treat successful bypasses as security reports; see [SECURITY.md](SECURITY.md).
+
 ## Run Tests
 
 ```bash
@@ -166,9 +213,6 @@ See `docs/BENCHMARKS.md` for methodology and interpretation.
 ## Form Integration
 
 ```html
-<!-- Add the widget script -->
-<script src="http://localhost:3000/widget/savanna-widget.iife.js" async></script>
-
 <!-- Hidden token field in your form -->
 <form id="my-form">
   <input type="hidden" name="savanna_token" id="savanna_token">
@@ -176,6 +220,8 @@ See `docs/BENCHMARKS.md` for methodology and interpretation.
   <button type="submit">Submit</button>
 </form>
 
+<!-- Add the widget script before the integration code below -->
+<script src="http://localhost:3000/widget/savanna-widget.iife.js"></script>
 <script>
 // Optional if you want to override API URL manually.
 // Widget auto-detects API origin from script src by default.
@@ -205,13 +251,13 @@ Widget size note: there is no hard CI rule that enforces `gzip < 6kb`; size is t
 SavannaGuard's detection methods are grounded in observable biological and network phenomena that bots cannot easily replicate.
 
 ### Physiological Tremor Analysis (Signal #9)
-Human hands exhibit involuntary tremor at 8–12 Hz — a neurological constant present in all healthy users. SavannaGuard applies FFT to mouse velocity streams and measures power in this frequency band. Bots produce either flat noise or programmatic smoothness; neither matches biological entropy.
+SavannaGuard samples fine-grained pointer movement and checks for natural high-frequency jitter patterns that are difficult for simple automation to reproduce. This signal is weighted with the other behavioral and proof-of-work signals.
 
 ### WebRTC Topology Oracle
-Before any form interaction, SavannaGuard passively collects WebRTC ICE candidates — the browser's own network self-report. Datacenter environments, single-interface VMs, and VPN leaks produce topology signatures that real home/office users never exhibit. Zero network requests required.
+Before form interaction, SavannaGuard can inspect local WebRTC host ICE candidates without configured STUN/TURN servers. This helps detect simple VM/datacenter-like topology without contacting third-party STUN services by default.
 
 ### Try to Beat It
-We invite security researchers to attempt bypass. Open an issue with your approach — successful bypasses that get patched earn credit in this README.
+We invite security researchers to attempt bypasses. Please report working bypasses or sensitive findings privately through [SECURITY.md](SECURITY.md); public issues are best for non-sensitive hardening ideas after a mitigation exists.
 
 ## API Endpoints
 
@@ -292,7 +338,7 @@ Fastify · SQLite · TypeScript · Vite · Alpine.js · Docker Compose
 - This repository is source-available (not OSI open source).
 - Community self-hosting is allowed.
 - Hosted/managed resale requires a separate commercial agreement.
-- See LICENSE and COMMERCIAL_USE.md for details.
+- See [LICENSE](LICENSE) and [COMMERCIAL_USE.md](COMMERCIAL_USE.md) for details.
 
 ## Open-Core Boundary
 

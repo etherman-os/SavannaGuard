@@ -43,7 +43,7 @@ function safeEquals(left: string, right: string): boolean {
   leftBuffer.copy(paddedLeft);
   rightBuffer.copy(paddedRight);
   try {
-    return crypto.timingSafeEqual(paddedLeft, paddedRight);
+    return crypto.timingSafeEqual(paddedLeft, paddedRight) && leftBuffer.length === rightBuffer.length;
   } catch {
     return false;
   }

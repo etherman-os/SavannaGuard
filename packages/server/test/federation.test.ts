@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/index.js';
 import { db } from '../src/db.js';
 import { logger } from '../src/services/logger.js';
+import { createAdminSessionCookie } from '../src/services/adminAuth.js';
 
 interface AddedPeerResponse {
   peer: {
@@ -37,9 +38,7 @@ interface SyncAllResponse {
 const CSRF_TOKEN = 'test-csrf-token-for-federation';
 
 function adminCookieHeader(): string {
-  const password = process.env.ADMIN_PASSWORD ?? 'admin';
-  const hash = crypto.createHash('sha256').update(password).digest('hex');
-  return `savanna_admin=${hash}; savanna_csrf=${CSRF_TOKEN}`;
+  return `savanna_admin=${createAdminSessionCookie()}; savanna_csrf=${CSRF_TOKEN}`;
 }
 
 /** Headers required for admin POST endpoints protected by requireAdminCsrf */

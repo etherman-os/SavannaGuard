@@ -7,12 +7,18 @@ services:
       - "${PORT:-3000}:3000"
     environment:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required. Set it in your .env file.}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required. Set it in your .env file.}
+      - ADMIN_SESSION_TTL_MS=${ADMIN_SESSION_TTL_MS:-43200000}
       - NODE_ENV=production
       - HOST=0.0.0.0
       - PORT=3000
       - DB_PATH=/data/savannaguard.db
+      - BODY_LIMIT_BYTES=${BODY_LIMIT_BYTES:-131072}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+      - SECURITY_HEADERS_ENABLED=${SECURITY_HEADERS_ENABLED:-true}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - TOKEN_SINGLE_USE=${TOKEN_SINGLE_USE:-true}
       - FEDERATION_ENABLED=${FEDERATION_ENABLED:-false}
       - FEDERATION_PEERS=${FEDERATION_PEERS:-}
       - FEDERATION_PSK=${FEDERATION_PSK:-}
@@ -32,6 +38,13 @@ services:
       - PASSIVE_PROTECTION_CUSTOM_RANGES=${PASSIVE_PROTECTION_CUSTOM_RANGES:-}
     volumes:
       - savannaguard_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/health"]
       interval: 30s

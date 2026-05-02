@@ -34,15 +34,33 @@ interface FederationPeerRow {
   last_success_at: number;
 }
 
-function adminCookie(): string {
-  const hash = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest('hex');
-  return `savanna_admin=${hash}`;
+function secretKeyForNode(nodeUrl: string): string {
+  if (process.env.SECRET_KEY) return process.env.SECRET_KEY;
+  return nodeUrl === NODE_B_URL ? 'test-secret-key-node-b' : 'test-secret-key-node-a';
 }
 
-function csrfHeaders(): Record<string, string> {
+function adminCookie(nodeUrl: string): string {
+  const secretKey = secretKeyForNode(nodeUrl);
+  const passwordHash = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest('hex');
+  const payload = {
+    v: 1,
+    iat: Date.now(),
+    exp: Date.now() + 12 * 60 * 60 * 1000,
+    nonce: crypto.randomBytes(16).toString('hex'),
+    passwordHash,
+  };
+  const signature = crypto
+    .createHmac('sha256', secretKey)
+    .update(JSON.stringify(payload))
+    .digest('base64url');
+  const token = Buffer.from(JSON.stringify({ payload, signature }), 'utf-8').toString('base64url');
+  return `savanna_admin=${token}`;
+}
+
+function csrfHeaders(nodeUrl: string): Record<string, string> {
   const token = 'test-csrf-token';
   return {
-    cookie: `${adminCookie()}; savanna_csrf=${token}`,
+    cookie: `${adminCookie(nodeUrl)}; savanna_csrf=${token}`,
     'x-requested-with': 'SavannaAdmin',
     'x-csrf-token': token,
   };
@@ -81,7 +99,7 @@ async function insertPeerViaApi(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...csrfHeaders(),
+      ...csrfHeaders(adminUrl),
     },
     body: JSON.stringify({ peerUrl, psk: peerPsk }),
   });
@@ -96,7 +114,7 @@ async function triggerSync(adminUrl: string): Promise<unknown> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...csrfHeaders(),
+      ...csrfHeaders(adminUrl),
     },
     body: JSON.stringify({ peerUrl: '' }),
   });
@@ -109,7 +127,7 @@ async function triggerSync(adminUrl: string): Promise<unknown> {
 
 async function getFederationStats(adminUrl: string): Promise<Record<string, unknown>> {
   const res = await fetch(`${adminUrl}/admin/api/federation/stats`, {
-    headers: { cookie: adminCookie() },
+    headers: { cookie: adminCookie(adminUrl) },
   });
   if (!res.ok) {
     const text = await res.text();
@@ -123,7 +141,7 @@ async function rotatePsk(adminUrl: string): Promise<{ ok: boolean; psk: string }
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...csrfHeaders(),
+      ...csrfHeaders(adminUrl),
     },
     body: JSON.stringify({}),
   });
@@ -384,7 +402,7 @@ describe('federation-docker', () => {
     'lists peers via the admin API',
     async () => {
       const res = await fetch(`${NODE_A_URL}/admin/api/federation/peers`, {
-        headers: { cookie: adminCookie() },
+        headers: { cookie: adminCookie(NODE_A_URL) },
       });
       expect(res.ok).toBe(true);
       const peers = (await res.json()) as Array<{ peerId: string; peerUrl: string }>;

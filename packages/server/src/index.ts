@@ -15,11 +15,68 @@ import { statSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const widgetDist = resolve(join(__dirname, '../../widget/dist'));
+const PUBLIC_CORS_PATH_PREFIXES = ['/api/v1/challenge/'];
+const PUBLIC_CORS_PATHS = ['/api/v1/token/validate'];
+
+function isPublicCorsPath(url: string): boolean {
+  return PUBLIC_CORS_PATHS.includes(url) || PUBLIC_CORS_PATH_PREFIXES.some((prefix) => url.startsWith(prefix));
+}
+
+function resolveCorsOrigin(origin: string | undefined): string | null {
+  const allowedOrigins = config.cors.allowedOrigins;
+  if (allowedOrigins.length === 0) return null;
+  if (allowedOrigins.includes('*')) return '*';
+  if (origin && allowedOrigins.includes(origin)) return origin;
+  return null;
+}
 
 export function buildServer(): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    trustProxy: config.trustProxy,
+    bodyLimit: Math.max(config.bodyLimitBytes, config.federation.maxPayloadBytes),
+  });
   app.register(cookie);
   app.register(formbody);
+
+  app.addHook('onRequest', async (req, rep) => {
+    if (!isPublicCorsPath(req.url)) return;
+
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+    const corsOrigin = resolveCorsOrigin(origin);
+    if (corsOrigin) {
+      rep.header('Access-Control-Allow-Origin', corsOrigin);
+      rep.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      rep.header('Access-Control-Allow-Headers', 'Content-Type');
+      rep.header('Access-Control-Max-Age', '600');
+      if (corsOrigin !== '*') rep.header('Vary', 'Origin');
+    }
+  });
+
+  app.options('/api/v1/*', async (req, rep) => {
+    if (!isPublicCorsPath(req.url)) return rep.status(404).send('Not found');
+    return rep.status(204).send();
+  });
+
+  if (config.securityHeaders.enabled) {
+    app.addHook('onRequest', async (_req, rep) => {
+      rep.header('X-Content-Type-Options', 'nosniff');
+      rep.header('X-Frame-Options', 'DENY');
+      rep.header('Referrer-Policy', 'no-referrer');
+      rep.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+      rep.header(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      );
+    });
+
+    app.addHook('onSend', async (req, rep, payload) => {
+      if (req.url.startsWith('/admin') || req.url.startsWith('/api/')) {
+        rep.header('Cache-Control', 'no-store');
+      }
+      return payload;
+    });
+  }
 
   app.get('/health', async (_req, rep) => {
     const dbOk = isDbHealthy();

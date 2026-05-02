@@ -120,6 +120,16 @@ describe('challenge flow', () => {
     expect(validateResponse.statusCode).toBe(200);
     const validated = validateResponse.json() as TokenValidateResponse;
     expect(validated.valid).toBe(true);
+
+    const replayResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/token/validate',
+      payload: { token: solved.token },
+    });
+
+    expect(replayResponse.statusCode).toBe(200);
+    const replayed = replayResponse.json() as TokenValidateResponse;
+    expect(replayed.valid).toBe(false);
   });
 
   it('obfKey is deterministic and matches deriveObfKey', async () => {

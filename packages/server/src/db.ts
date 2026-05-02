@@ -41,7 +41,8 @@ db.exec(`
     webrtc_oracle_score REAL DEFAULT 0,
     final_score REAL DEFAULT 0,
     verdict TEXT DEFAULT 'pending',
-    verdict_token TEXT
+    verdict_token TEXT,
+    verdict_token_used_at INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -196,6 +197,7 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_peers_peer_url ON fede
 safeAddColumn('sessions', 'timing_oracle_score', 'REAL', '0');
 safeAddColumn('sessions', 'tremor_score', 'REAL', '0');
 safeAddColumn('sessions', 'webrtc_oracle_score', 'REAL', '0');
+safeAddColumn('sessions', 'verdict_token_used_at', 'INTEGER', '0');
 
 export interface DbChallenge {
   id: string;
@@ -223,6 +225,7 @@ export interface DbSession {
   final_score: number;
   verdict: string;
   verdict_token: string | null;
+  verdict_token_used_at: number;
   ip_hash: string;
   user_agent: string;
 }

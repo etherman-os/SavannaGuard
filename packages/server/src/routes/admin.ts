@@ -14,8 +14,15 @@ import { getThreatStatus } from '../services/adaptivePow.js';
 import { getBotSignatureStats, cleanupOldSignatures } from '../services/botSignatures.js';
 import { getPassiveProtectionStats } from '../services/passiveProtection.js';
 import { checkAdminRateLimit } from '../services/rateLimit.js';
+import {
+  ADMIN_COOKIE_MAX_AGE_SECONDS,
+  ADMIN_COOKIE_NAME,
+  createAdminSessionCookie,
+  isAdminRequest,
+  safeEquals,
+  verifyAdminPassword,
+} from '../services/adminAuth.js';
 import crypto from 'crypto';
-import { config } from '../config.js';
 
 // Brute-force protection for admin login
 const loginAttempts = new Map<string, { count: number; lockedUntil: number; lastAttempt: number }>();
@@ -71,28 +78,6 @@ function resetLoginAttempts(ip: string): void {
   loginAttempts.delete(ip);
 }
 
-const ADMIN_COOKIE_NAME = 'savanna_admin';
-
-function sha256(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function safeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, 'utf-8');
-  const rightBuffer = Buffer.from(right, 'utf-8');
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function currentAdminCookieValue(): string {
-  return sha256(config.adminPassword);
-}
-
-function verifyPassword(token: string | undefined): boolean {
-  if (!token) return false;
-  return safeEquals(token, currentAdminCookieValue());
-}
-
 function readPasswordFromBody(body: unknown): string | null {
   if (!body || typeof body !== 'object') return null;
   const password = (body as Record<string, unknown>).password;
@@ -127,7 +112,7 @@ function readAdaptiveEnabledFromBody(body: unknown): boolean | null {
 }
 
 function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
-  if (verifyPassword(request.cookies[ADMIN_COOKIE_NAME])) {
+  if (isAdminRequest(request)) {
     const csrfCookie = request.cookies['savanna_csrf'];
     if (!csrfCookie || typeof csrfCookie !== 'string' || csrfCookie.length < 32) {
       setCsrfCookie(reply, generateCsrfToken());
@@ -200,13 +185,14 @@ export function adminRoutes(app: FastifyInstance) {
     }
 
     const password = readPasswordFromBody(req.body);
-    if (password && safeEquals(sha256(password), currentAdminCookieValue())) {
+    if (verifyAdminPassword(password)) {
       resetLoginAttempts(ip);
-      rep.setCookie(ADMIN_COOKIE_NAME, currentAdminCookieValue(), {
+      rep.setCookie(ADMIN_COOKIE_NAME, createAdminSessionCookie(), {
         path: '/',
         httpOnly: true,
         sameSite: 'strict',
         secure: process.env.NODE_ENV === 'production',
+        maxAge: ADMIN_COOKIE_MAX_AGE_SECONDS,
       });
       const csrfToken = generateCsrfToken();
       setCsrfCookie(rep, csrfToken);

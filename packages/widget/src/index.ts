@@ -11,6 +11,7 @@ import { collectTimingOracle } from './collectors/timing-oracle.js';
 import { collectTremor } from './collectors/tremor.js';
 import { collectWebRTCOracle } from './collectors/webrtc-oracle.js';
 import type { BehavioralData } from './types.js';
+import PowWorker from './pow.worker.ts?worker';
 
 // Re-export types for consumer TypeScript support
 export type { WidgetConfig, WidgetCallbacks, SavannaGuardWidget, BehavioralData, ChallengeResponse, SolveResponse } from './types.js';
@@ -125,7 +126,7 @@ async function run(apiUrl: string): Promise<void> {
 
   const { challengeId, nonce, difficulty, sessionId, obfKey } = await createChallenge();
 
-  const worker = new Worker(new URL('./pow.worker.ts', import.meta.url), { type: 'module' });
+  const worker = new PowWorker();
   try {
     const solution = await new Promise<string | null>((resolve) => {
       worker.onmessage = (event: MessageEvent<{ solution: string | null }>) => resolve(event.data.solution);

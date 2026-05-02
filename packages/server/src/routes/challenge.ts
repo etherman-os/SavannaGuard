@@ -131,7 +131,7 @@ function hashIp(ip: string): string {
 }
 
 export function challengeRoutes(app: FastifyInstance) {
-  app.post('/api/v1/challenge/create', async (req, rep) => {
+  app.post('/api/v1/challenge/create', { bodyLimit: config.bodyLimitBytes }, async (req, rep) => {
     const clientIp = req.ip ?? 'unknown';
 
     // Passive protection: block datacenter IPs if configured
@@ -188,7 +188,7 @@ export function challengeRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/api/v1/challenge/solve', async (req, rep) => {
+  app.post('/api/v1/challenge/solve', { bodyLimit: config.bodyLimitBytes }, async (req, rep) => {
     const clientIp = req.ip ?? 'unknown';
 
     // Passive protection: block datacenter IPs if configured

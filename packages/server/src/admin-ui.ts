@@ -59,7 +59,7 @@ export function loginPage(error = ''): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Login</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+<link rel="stylesheet" href="/admin/static/tailwind.min.css">
 </head>
 <body class="bg-gray-100 flex items-center justify-center h-screen">
   <form method="POST" action="/admin/login" class="bg-white p-8 rounded shadow">

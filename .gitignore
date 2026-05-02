@@ -46,6 +46,9 @@ savannaguard.txt
 ARCHITECTURE_RULES.txt
 DELTA_REPORT.md
 docs/*
+!docs/README.md
+!docs/api.md
+!docs/deployment.md
 !docs/BENCHMARKS.md
 docs/perf/*.json
 docs/superpowers/

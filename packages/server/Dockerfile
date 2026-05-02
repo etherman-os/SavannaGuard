@@ -1,5 +1,5 @@
 # === Build Stage ===
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # better-sqlite3 C++ addon requires build tools
 RUN apk add --no-cache build-base python3
@@ -16,14 +16,20 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
-# Prune to production dependencies only
-RUN corepack enable && pnpm install --prod --frozen-lockfile
+# Reinstall production-only dependencies into a clean node_modules tree
+ENV CI=false
+ENV PNPM_ENABLE_BUILD_SCRIPTS=true
+ENV npm_config_build_from_source=true
+RUN rm -rf node_modules packages/server/node_modules packages/widget/node_modules \
+ && corepack enable \
+ && pnpm install --prod --frozen-lockfile
 
 # === Production Stage ===
-FROM node:20-alpine
+FROM node:22-alpine
 
 # better-sqlite3 native addon requires libstdc++ at runtime
-RUN apk add --no-cache libstdc++
+RUN apk add --no-cache libstdc++ \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Create data directory for SQLite and set permissions
 RUN mkdir -p /data && chown -R node:node /data
